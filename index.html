@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>MyClassroom - Online Learning</title>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f7fb;
+            color: #222;
+        }
+
+        header {
+            background: #173b8f;
+            color: white;
+            padding: 20px 8%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        nav a {
+            color: white;
+            text-decoration: none;
+            margin-left: 20px;
+            font-size: 15px;
+        }
+
+        nav a:hover {
+            text-decoration: underline;
+        }
+
+        .hero {
+            padding: 80px 8%;
+            background: white;
+            text-align: center;
+        }
+
+        .hero h1 {
+            font-size: 42px;
+            color: #173b8f;
+            margin-bottom: 20px;
+        }
+
+        .hero p {
+            font-size: 18px;
+            max-width: 700px;
+            margin: auto;
+            line-height: 1.6;
+            color: #555;
+        }
+
+        .buttons {
+            margin-top: 30px;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 14px 25px;
+            margin: 8px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .student-btn {
+            background: #173b8f;
+            color: white;
+        }
+
+        .teacher-btn {
+            background: #e9eefc;
+            color: #173b8f;
+        }
+
+        .features {
+            padding: 60px 8%;
+        }
+
+        .features h2 {
+            text-align: center;
+            color: #173b8f;
+            margin-bottom: 35px;
+        }
+
+        .feature-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+        }
+
+        .feature {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+        }
+
+        .feature h3 {
+            color: #173b8f;
+            margin-bottom: 10px;
+        }
+
+        .feature p {
+            color: #666;
+            line-height: 1.5;
+        }
+
+        footer {
+            background: #173b8f;
+            color: white;
+            text-align: center;
+            padding: 20px;
+            margin-top: 30px;
+        }
+
+        @media (max-width: 600px) {
+            header {
+                flex-direction: column;
+                gap: 15px;
+            }
+
+            nav a {
+                margin: 0 6px;
+            }
+
+            .hero h1 {
+                font-size: 32px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Header -->
+    <header>
+        <div class="logo">MyClassroom</div>
+
+        <nav>
+            <a href="#">Home</a>
+            <a href="#">About</a>
+            <a href="#">Contact</a>
+        </nav>
+    </header>
+
+
+    <!-- Hero Section -->
+    <section class="hero">
+
+        <h1>Welcome to MyClassroom</h1>
+
+        <p>
+            A modern online classroom where teachers and students
+            can learn, communicate, complete assignments, take tests,
+            and track academic progress.
+        </p>
+
+        <div class="buttons">
+            <a href="#" class="btn student-btn">
+                Student Login
+            </a>
+
+            <a href="#" class="btn teacher-btn">
+                Teacher Login
+            </a>
+        </div>
+
+    </section>
+
+
+    <!-- Features -->
+    <section class="features">
+
+        <h2>Everything You Need for Learning</h2>
+
+        <div class="feature-container">
+
+            <div class="feature">
+                <h3>📚 Learning Materials</h3>
+                <p>
+                    Upload and share notes, textbooks, videos,
+                    documents and other learning materials.
+                </p>
+            </div>
+
+            <div class="feature">
+                <h3>📝 Assignments</h3>
+                <p>
+                    Give students classwork and assignments
+                    and receive their submissions online.
+                </p>
+            </div>
+
+            <div class="feature">
+                <h3>❓ Quizzes & Tests</h3>
+                <p>
+                    Create quizzes, tests and examinations
+                    for your students.
+                </p>
+            </div>
+
+            <div class="feature">
+                <h3>📊 Grading</h3>
+                <p>
+                    Grade students and monitor their academic
+                    performance and progress.
+                </p>
+            </div>
+
+            <div class="feature">
+                <h3>🎥 Live Classes</h3>
+                <p>
+                    Hold face-to-face online classes where
+                    teachers and students can interact.
+                </p>
+            </div>
+
+            <div class="feature">
+                <h3>💬 Classroom Communication</h3>
+                <p>
+                    Allow teachers and students to communicate
+                    about lessons, assignments and classes.
+                </p>
+            </div>
+
+        </div>
+
+    </section>
+
+
+    <!-- Footer -->
+    <footer>
+        <p>
+            © 2026 MyClassroom. All rights reserved.
+        </p>
+    </footer>
+
+</body>
+</html>
