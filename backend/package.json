@@ -10,7 +10,8 @@
     "migrate:settings": "node migrations/002_institution_settings.js",
     "migrate:all": "node migrations/001_multi_tenant_foundation.js && node migrations/002_institution_settings.js && node migrations/003_institution_communications.js",
     "check": "node --check server.js && node --check migrations/001_multi_tenant_foundation.js && node --check migrations/002_institution_settings.js && node --check migrations/003_institution_communications.js && node --check ../frontend/app.js",
-    "migrate:communications": "node migrations/003_institution_communications.js"
+    "migrate:communications": "node migrations/003_institution_communications.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
