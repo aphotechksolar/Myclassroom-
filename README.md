@@ -41,14 +41,14 @@ The report card is print-ready HTML and can be saved as PDF from the browser pri
 
 ## Multi-school foundation migration (development only)
 
-The first tenant data-model migration is available as an explicit command:
+The tenant database migrations are available as an explicit, ordered command:
 
 ```bash
 cd backend
 npm install
-npm run migrate:tenant
+npm run migrate:all
 ```
 
-It creates the institution and institution-membership tables, adds institution references to existing class, announcement, audit and settings records, and assigns the current single-school data to a `legacy-school` institution. The migration is idempotent and records its version in `schema_migrations`.
+The migrations create institution and institution-membership tables, add institution references to existing class, announcement, audit and settings records, create institution-isolated settings storage, and assign the current single-school data to a `legacy-school` institution. Both migrations are idempotent and record their versions in `schema_migrations`. The server also ensures the required schema exists at startup for existing installations.
 
-**Do not treat this migration as enabling multi-school production use.** The existing API routes have not yet been changed to enforce institution scope. Do not onboard a second school or expose real school data to another institution until tenant-aware authentication, query scoping, file access controls, and cross-institution isolation tests are implemented and reviewed. Back up the SQLite database before running this migration on any database containing data.
+**This is an early tenant-scoping implementation, not production certification.** Do not onboard a second school or expose real school data until the API changes, role flows, deployment, and cross-institution isolation tests have been independently tested and reviewed. Back up the SQLite database before running migrations on any database containing data. Existing local demo data is assigned to `legacy-school`.
