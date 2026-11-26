@@ -98,7 +98,7 @@ function createAssessmentsRepository(database) {
         "SELECT * FROM attempts WHERE assessment_id = $1 AND student_id = $2",
         [assessment.id, id]
       );
-      if (existing && existing.status === "submitted") {
+      if (existing && existing.submitted_at) {
         const error = new Error("Assessment already submitted");
         error.status = 400;
         error.attempt = existing;
@@ -150,7 +150,7 @@ function createAssessmentsRepository(database) {
         error.status = 400;
         throw error;
       }
-      if (attempt.status === "submitted") return attempt;
+      if (attempt.submitted_at) return attempt;
       let questions;
       try { questions = JSON.parse(assessment.questions_json); }
       catch { throw new Error("Assessment questions are unavailable"); }
