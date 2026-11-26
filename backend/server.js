@@ -537,16 +537,11 @@ app.post("/api/assignments",auth,roles("admin","teacher"),async(req,res,next)=>{
 });
 app.get("/api/assignments",auth,async(req,res,next)=>{try{const rows=await learningContentRepository.listAssignmentsForUser(req.user.id,req.user.institution_id,req.user.institution_role);res.json(rows);}catch(error){next(error);}});
 app.post("/api/assignments/:id/submit",auth,roles("student"),(req,res)=>{const a=db.prepare("SELECT * FROM assignments WHERE id=?").get(req.params.id);if(!a||!classForUser(req.user,a.class_id)||!db.prepare("SELECT 1 FROM enrollments WHERE class_id=? AND student_id=?").get(a.class_id,req.user.id))return res.status(403).json({error:"Not allowed"});db.prepare("INSERT INTO submissions(assignment_id,student_id,answer) VALUES(?,?,?) ON CONFLICT(assignment_id,student_id) DO UPDATE SET answer=excluded.answer,submitted_at=CURRENT_TIMESTAMP").run(a.id,req.user.id,req.body.answer||"");notify(a.teacher_id,"Assignment submitted",req.user.name+" submitted "+a.title,req.user.institution_id);res.json({ok:true});});
-app.get("/api/submissions",auth,(req,res)=>{
-  const sql=`SELECT s.*,a.title,a.max_score,a.class_id,u.name student_name,u.email
-    FROM submissions s JOIN assignments a ON a.id=s.assignment_id
-    JOIN classes c ON c.id=a.class_id JOIN users u ON u.id=s.student_id
-    JOIN institution_memberships m ON m.user_id=u.id AND m.institution_id=? AND m.status='active'`;
-  let rows;
-  if(req.user.institution_role==="student") rows=db.prepare(sql+" WHERE c.institution_id=? AND s.student_id=? ORDER BY s.id DESC").all(req.user.institution_id,req.user.institution_id,req.user.id);
-  else if(req.user.institution_role==="teacher") rows=db.prepare(sql+" WHERE c.institution_id=? AND (a.teacher_id=? OR c.teacher_id=?) ORDER BY s.id DESC").all(req.user.institution_id,req.user.institution_id,req.user.id,req.user.id);
-  else rows=db.prepare(sql+" WHERE c.institution_id=? ORDER BY s.id DESC").all(req.user.institution_id,req.user.institution_id);
-  res.json(rows);
+app.get("/api/submissions",auth,async(req,res,next)=>{
+  try{
+    const rows=await learningContentRepository.listSubmissionsForUser(req.user.id,req.user.institution_id,req.user.institution_role);
+    res.json(rows);
+  }catch(error){next(error);}
 });
 app.patch("/api/submissions/:id/grade",auth,roles("admin","teacher"),(req,res)=>{
   const sub=db.prepare(`SELECT s.*,a.teacher_id,a.class_id,c.teacher_id class_teacher_id,c.institution_id
