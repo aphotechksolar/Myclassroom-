@@ -424,8 +424,8 @@ app.post("/api/auth/guardian/redeem",(req,res)=>{
       if(!user) {
         const created=db.prepare("INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,'student')").run(name,email,bcrypt.hashSync(password,12));
         user=db.prepare("SELECT * FROM users WHERE id=?").get(created.lastInsertRowid);
-      } else if(!db.prepare("SELECT 1 FROM institution_memberships WHERE institution_id=? AND user_id=? AND role='parent'").get(invitation.institution_id,user.id)) {
-        throw new Error("This email already belongs to an account that is not a parent in this school. Contact the school.");
+      } else {
+        if(!bcrypt.compareSync(password,user.password_hash)) throw new Error("This email already has an account. Use its existing password to accept the invitation.");
       }
       const membership=db.prepare("SELECT role,status FROM institution_memberships WHERE institution_id=? AND user_id=?").get(invitation.institution_id,user.id);
       if(membership && (membership.role!=="parent" || membership.status!=="active")) throw new Error("This account already has a different or inactive role in this school.");
@@ -756,6 +756,21 @@ app.post("/api/guardians/invitations",auth,roles("admin"),(req,res)=>{
     .run(req.user.institution_id,studentId,email,tokenHash,expiresAt,req.user.id);
   log(req.user.id,"Created guardian invitation",JSON.stringify({student_id:studentId,email}),req.user.institution_id);
   res.status(201).json({ok:true,invitation_token:rawToken,expires_at:expiresAt,delivery:"Share this one-time token privately with the verified guardian. It is not emailed automatically."});
+});
+app.get("/api/guardians/manage",auth,roles("admin"),(req,res)=>{
+  const invitations=db.prepare(`SELECT i.id,i.email,i.student_id,u.name student_name,i.expires_at,i.used_at,i.created_at
+    FROM guardian_invitations i JOIN users u ON u.id=i.student_id
+    WHERE i.institution_id=? ORDER BY i.id DESC LIMIT 100`).all(req.user.institution_id);
+  const links=db.prepare(`SELECT l.guardian_id,l.student_id,g.name guardian_name,g.email guardian_email,s.name student_name,l.status,l.verified_at
+    FROM guardian_student_links l JOIN users g ON g.id=l.guardian_id JOIN users s ON s.id=l.student_id
+    WHERE l.institution_id=? ORDER BY l.verified_at DESC LIMIT 100`).all(req.user.institution_id);
+  res.json({invitations,links});
+});
+app.delete("/api/guardians/invitations/:id",auth,roles("admin"),(req,res)=>{
+  const changed=db.prepare("DELETE FROM guardian_invitations WHERE id=? AND institution_id=? AND used_at IS NULL").run(Number(req.params.id),req.user.institution_id);
+  if(!changed.changes) return res.status(404).json({error:"Pending invitation not found."});
+  log(req.user.id,"Cancelled guardian invitation",String(req.params.id),req.user.institution_id);
+  res.json({ok:true});
 });
 app.get("/api/guardian/children",auth,(req,res)=>{
   if(req.user.institution_role!=="parent") return res.status(403).json({error:"Parent access required."});
