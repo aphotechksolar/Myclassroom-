@@ -8,6 +8,7 @@ const { openAsyncSqliteDatabase } = require("./db/sqlite-async");
 const { createSettingsRepository } = require("./repositories/settings");
 const { createNotificationsRepository } = require("./repositories/notifications");
 const { createAnnouncementsRepository } = require("./repositories/announcements");
+const { createMessagesRepository } = require("./repositories/messages");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const helmet = require("helmet");
@@ -44,6 +45,7 @@ const asyncDb = openAsyncSqliteDatabase(db);
 const settingsRepository = createSettingsRepository(asyncDb);
 const notificationsRepository = createNotificationsRepository(asyncDb);
 const announcementsRepository = createAnnouncementsRepository(asyncDb);
+const messagesRepository = createMessagesRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -591,7 +593,12 @@ app.get("/api/notifications",auth,async(req,res,next)=>{
 });
 app.patch("/api/notifications/:id/read",auth,(req,res)=>{db.prepare("UPDATE notifications SET read_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND institution_id=?").run(req.params.id,req.user.id,req.user.institution_id);res.json({ok:true});});
 
-app.get("/api/messages",auth,(req,res)=>res.json(db.prepare(`SELECT m.*,s.name sender_name,r.name receiver_name FROM messages m JOIN users s ON s.id=m.sender_id JOIN users r ON r.id=m.receiver_id JOIN institution_memberships sm ON sm.user_id=m.sender_id AND sm.institution_id=? AND sm.status='active' JOIN institution_memberships rm ON rm.user_id=m.receiver_id AND rm.institution_id=? AND rm.status='active' WHERE m.institution_id=? AND (m.sender_id=? OR m.receiver_id=?) ORDER BY m.id DESC`).all(req.user.institution_id,req.user.institution_id,req.user.institution_id,req.user.id,req.user.id)));
+app.get("/api/messages",auth,async(req,res,next)=>{
+  try {
+    const rows = await messagesRepository.listForUser(req.user.id, req.user.institution_id);
+    res.json(rows);
+  } catch (error) { next(error); }
+});
 app.post("/api/messages",auth,(req,res)=>{const receiver=db.prepare("SELECT u.id FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE u.id=? AND m.institution_id=? AND m.status='active'").get(req.body.receiver_id,req.user.institution_id);if(!receiver)return res.status(404).json({error:"Recipient not found in this school"});const r=db.prepare("INSERT INTO messages(sender_id,receiver_id,subject,body,institution_id) VALUES(?,?,?,?,?)").run(req.user.id,receiver.id,req.body.subject||"",req.body.body||"",req.user.institution_id);notify(receiver.id,"New message","You have a new message from "+req.user.name,req.user.institution_id);res.json({id:r.lastInsertRowid});});
 app.patch("/api/messages/:id/read",auth,(req,res)=>{db.prepare("UPDATE messages SET read_at=CURRENT_TIMESTAMP WHERE id=? AND receiver_id=? AND institution_id=?").run(req.params.id,req.user.id,req.user.institution_id);res.json({ok:true});});
 
