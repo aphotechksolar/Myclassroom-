@@ -40,7 +40,63 @@ function createLearningContentRepository(database) {
     return { join: "", where: "", params: [] };
   }
 
+  async function createForClass({ userId, institutionId, role, classId, kind, values }) {
+    const id = validateScope(userId, institutionId, role);
+    if (!["school_admin", "teacher"].includes(role)) {
+      throw new TypeError("Only school admins and teachers can create learning content");
+    }
+    if (!Number.isSafeInteger(Number(classId)) || Number(classId) <= 0) {
+      throw new TypeError("A valid class ID is required");
+    }
+
+    return database.transaction(async (tx) => {
+      const schoolClass = await tx.one(
+        "SELECT id, teacher_id FROM classes WHERE id = $1 AND institution_id = $2",
+        [Number(classId), institutionId]
+      );
+      if (!schoolClass || (role === "teacher" && Number(schoolClass.teacher_id) !== id)) {
+        const error = new Error("Not allowed");
+        error.status = 403;
+        throw error;
+      }
+
+      const insert = kind === "material"
+        ? await tx.execute(
+            "INSERT INTO materials(title, description, url, file_url, class_id, teacher_id) VALUES($1, $2, $3, $4, $5, $6)",
+            [values.title, values.description, values.url, values.fileUrl, Number(classId), id]
+          )
+        : await tx.execute(
+            "INSERT INTO assignments(title, description, due_date, class_id, teacher_id, max_score) VALUES($1, $2, $3, $4, $5, $6)",
+            [values.title, values.description, values.dueDate, Number(classId), id, values.maxScore]
+          );
+
+      const table = kind === "material" ? "materials" : "assignments";
+      const record = await tx.one(`SELECT * FROM ${table} WHERE id = $1`, [insert.insertId]);
+      const enrolled = await tx.many(
+        "SELECT student_id FROM enrollments WHERE class_id = $1",
+        [Number(classId)]
+      );
+      return {
+        [kind]: record,
+        studentIds: enrolled.map((row) => Number(row.student_id))
+      };
+    });
+  }
+
   return Object.freeze({
+    async createMaterial(input) {
+      return createForClass({ ...input, kind: "material", values: {
+        title: input.title, description: input.description || "", url: input.url || "", fileUrl: input.fileUrl || ""
+      }});
+    },
+
+    async createAssignment(input) {
+      return createForClass({ ...input, kind: "assignment", values: {
+        title: input.title, description: input.description || "", dueDate: input.dueDate || null,
+        maxScore: Number(input.maxScore || 100)
+      }});
+    },
+
     async listMaterialsForUser(userId, institutionId, role) {
       const id = validateScope(userId, institutionId, role);
       const visibility = buildVisibility(role, id, "c", "m");
