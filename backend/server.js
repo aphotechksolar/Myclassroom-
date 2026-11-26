@@ -477,8 +477,8 @@ app.get("/api/export/gradebook.csv",auth,roles("admin","teacher"),(req,res)=>{
   const base=`SELECT u.name student,c.name class_name,COALESCE(ROUND(AVG(at.percentage),1),0) assessment_average
     FROM users u JOIN enrollments e ON e.student_id=u.id JOIN classes c ON c.id=e.class_id
     JOIN institution_memberships m ON m.user_id=u.id AND m.institution_id=? AND m.status='active'
-    LEFT JOIN attempts at ON at.student_id=u.id AND at.status='submitted'
-    LEFT JOIN assessments a ON a.id=at.assessment_id AND a.class_id=c.id
+    LEFT JOIN assessments a ON a.class_id=c.id
+    LEFT JOIN attempts at ON at.assessment_id=a.id AND at.student_id=u.id AND at.status='submitted'
     WHERE c.institution_id=?`;
   const rows=req.user.institution_role==="teacher"
     ?db.prepare(base+" AND c.teacher_id=? GROUP BY u.id,c.id").all(req.user.institution_id,req.user.institution_id,req.user.id)
