@@ -22,16 +22,54 @@ function createAssessmentsRepository(database) {
   }
 
   function normalizeQuestions(raw) {
-    if (!Array.isArray(raw)) throw new TypeError("Questions must be an array");
-    return raw.map((question, index) => ({
-      question: String(question.question || "Question " + (index + 1)),
-      options: Array.isArray(question.options) ? question.options.map(String) : [],
-      answer: Number(question.answer || 0)
-    })).filter(question =>
-      question.options.length >= 2 &&
-      question.answer >= 0 &&
-      question.answer < question.options.length
-    );
+    if (!Array.isArray(raw) || raw.length < 1 || raw.length > 100) {
+      throw new TypeError("An assessment must contain between 1 and 100 questions");
+    }
+    return raw.map((question, index) => {
+      if (!question || typeof question !== "object" || Array.isArray(question)) {
+        throw new TypeError("Question " + (index + 1) + " is invalid");
+      }
+      const prompt = typeof question.question === "string" ? question.question.trim() : "";
+      if (!prompt || prompt.length > 2000) {
+        throw new TypeError("Question " + (index + 1) + " must contain 1 to 2000 characters");
+      }
+      if (!Array.isArray(question.options) || question.options.length < 2 || question.options.length > 10) {
+        throw new TypeError("Question " + (index + 1) + " must have between 2 and 10 options");
+      }
+      const options = question.options.map(option =>
+        typeof option === "string" ? option.trim() : ""
+      );
+      if (options.some(option => !option || option.length > 500)) {
+        throw new TypeError("Each option must contain 1 to 500 characters");
+      }
+      if (new Set(options).size !== options.length) {
+        throw new TypeError("Question " + (index + 1) + " cannot contain duplicate options");
+      }
+      if (!Number.isInteger(question.answer) || question.answer < 0 || question.answer >= options.length) {
+        throw new TypeError("Question " + (index + 1) + " must have a valid correct answer");
+      }
+      return { question: prompt, options, answer: question.answer };
+    });
+  }
+
+  function validateAssessmentSettings(input) {
+    const title = typeof input.title === "string" ? input.title.trim() : "";
+    if (!title || title.length > 160) {
+      throw new TypeError("Assessment title must contain 1 to 160 characters");
+    }
+    const duration = input.durationMinutes == null ? 20 : Number(input.durationMinutes);
+    if (!Number.isInteger(duration) || duration < 1 || duration > 480) {
+      throw new TypeError("Assessment duration must be between 1 and 480 minutes");
+    }
+    const passMark = input.passMark == null ? 50 : Number(input.passMark);
+    if (!Number.isFinite(passMark) || passMark < 0 || passMark > 100) {
+      throw new TypeError("Pass mark must be between 0 and 100");
+    }
+    const type = input.type == null ? "quiz" : input.type;
+    if (!["quiz", "exam"].includes(type)) {
+      throw new TypeError("Assessment type must be quiz or exam");
+    }
+    return { title, duration, passMark, type };
   }
 
   function parseAnswers(raw) {
@@ -91,10 +129,8 @@ function createAssessmentsRepository(database) {
       throw new TypeError("A valid class ID is required");
     }
 
+    const settings = validateAssessmentSettings(input);
     const questions = normalizeQuestions(input.questions);
-    if (!questions.length) {
-      throw new TypeError("Add at least one valid question");
-    }
 
     return database.transaction(async (tx) => {
       const schoolClass = await tx.one(
@@ -107,13 +143,9 @@ function createAssessmentsRepository(database) {
         throw error;
       }
 
-      const title = input.title;
-      const type = input.type || "quiz";
-      const duration = Number(input.durationMinutes || 20);
-      const passMark = Number(input.passMark || 50);
       const inserted = await tx.execute(
         "INSERT INTO assessments(title, type, duration_minutes, class_id, teacher_id, pass_mark, questions_json) VALUES($1, $2, $3, $4, $5, $6, $7)",
-        [title, type, duration, Number(input.classId), id, passMark, JSON.stringify(questions)]
+        [settings.title, settings.type, settings.duration, Number(input.classId), id, settings.passMark, JSON.stringify(questions)]
       );
       const students = await tx.many(
         "SELECT student_id FROM enrollments WHERE class_id = $1",
