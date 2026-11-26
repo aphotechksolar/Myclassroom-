@@ -17,6 +17,7 @@ const { createTimetableRepository } = require("./repositories/timetable");
 const { createPeopleRepository } = require("./repositories/people");
 const { createAttendanceRepository } = require("./repositories/attendance");
 const { createGradebookRepository } = require("./repositories/gradebook");
+const { createReportCardRepository } = require("./repositories/report-cards");
 const { createPerformanceRepository } = require("./repositories/performance");
 const { createRankingsRepository } = require("./repositories/rankings");
 const { createStorage } = require("./storage");
@@ -103,6 +104,7 @@ const timetableRepository = createTimetableRepository(asyncDb);
 const peopleRepository = createPeopleRepository(asyncDb);
 const attendanceRepository = createAttendanceRepository(asyncDb);
 const gradebookRepository = createGradebookRepository(asyncDb);
+const reportCardRepository = createReportCardRepository(asyncDb);
 const performanceRepository = createPerformanceRepository(asyncDb);
 const rankingsRepository = createRankingsRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
@@ -919,16 +921,18 @@ app.patch("/api/messages/:id/read",auth,async(req,res,next)=>{
   } catch (error) { next(error); }
 });
 
-app.get("/api/report-card/:studentId",auth,(req,res)=>{
-  const sid=Number(req.params.studentId);
-  if(req.user.role==="student"&&req.user.id!==sid)return res.status(403).json({error:"Not allowed"});
-  if(req.user.institution_role==="teacher"){const ok=db.prepare("SELECT 1 FROM enrollments e JOIN classes c ON c.id=e.class_id WHERE e.student_id=? AND c.teacher_id=? AND c.institution_id=?").get(sid,req.user.id,req.user.institution_id);if(!ok)return res.status(403).json({error:"Not allowed"});}
-  const student=db.prepare("SELECT u.id,u.name,u.email FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE u.id=? AND m.institution_id=? AND m.status='active'").get(sid,req.user.institution_id);
-  if(!student) return res.status(404).json({error:"Student not found in this school"});
-  const subjects=db.prepare(`SELECT s.name subject,ROUND(COALESCE(AVG(at.percentage),0),1) average FROM subjects s JOIN classes c ON c.id=s.class_id LEFT JOIN assessments a ON a.class_id=s.class_id LEFT JOIN attempts at ON at.assessment_id=a.id AND at.student_id=? AND at.status='submitted' WHERE c.institution_id=? AND s.class_id IN (SELECT class_id FROM enrollments WHERE student_id=?) GROUP BY s.id`).all(sid,req.user.institution_id,sid);
-  const att=db.prepare("SELECT COUNT(*) total,SUM(att.status='present') present,SUM(att.status='absent') absent,SUM(att.status='late') late FROM attendance att JOIN classes c ON c.id=att.class_id WHERE att.student_id=? AND c.institution_id=?").get(sid,req.user.institution_id);
-  const school=db.prepare("SELECT value FROM institution_settings WHERE key='school_name' AND institution_id=?").get(req.user.institution_id)?.value||req.user.institution_name||"MyClassroom Academy";
-  res.json({school,student,subjects,attendance:att});
+app.get("/api/report-card/:studentId",auth,async(req,res,next)=>{
+  try {
+    const report=await reportCardRepository.getForUser(
+      req.user.id,req.user.institution_id,req.user.institution_role,req.params.studentId,
+      req.user.institution_name
+    );
+    res.json(report);
+  } catch(error) {
+    if(error.status) return res.status(error.status).json({error:error.message});
+    if(error instanceof TypeError) return res.status(400).json({error:error.message});
+    next(error);
+  }
 });
 app.get("/api/settings",auth,async(req,res,next)=>{
   try {
