@@ -19,6 +19,7 @@ const { createAttendanceRepository } = require("./repositories/attendance");
 const { createGradebookRepository } = require("./repositories/gradebook");
 const { createReportCardRepository } = require("./repositories/report-cards");
 const { createGuardianRepository } = require("./repositories/guardians");
+const { createAuditRepository } = require("./repositories/audit");
 const { createPerformanceRepository } = require("./repositories/performance");
 const { createRankingsRepository } = require("./repositories/rankings");
 const { createStorage } = require("./storage");
@@ -107,6 +108,7 @@ const attendanceRepository = createAttendanceRepository(asyncDb);
 const gradebookRepository = createGradebookRepository(asyncDb);
 const reportCardRepository = createReportCardRepository(asyncDb);
 const guardianRepository = createGuardianRepository(asyncDb);
+const auditRepository = createAuditRepository(asyncDb);
 const performanceRepository = createPerformanceRepository(asyncDb);
 const rankingsRepository = createRankingsRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
@@ -647,7 +649,12 @@ app.delete("/api/admin/users/:id",auth,roles("admin"),(req,res)=>{
   db.prepare("DELETE FROM institution_memberships WHERE institution_id=? AND user_id=?").run(req.user.institution_id,req.params.id);
   log(req.user.id,"Removed school membership",String(req.params.id),req.user.institution_id); res.json({ok:true});
 });
-app.get("/api/audit",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT a.*,u.name actor_name FROM audit_log a LEFT JOIN users u ON u.id=a.actor_id WHERE a.institution_id=? ORDER BY a.id DESC LIMIT 100").all(req.user.institution_id)));
+app.get("/api/audit",auth,roles("admin"),async(req,res,next)=>{
+  try {
+    const rows=await auditRepository.listForInstitution(req.user.institution_id);
+    res.json(rows);
+  } catch(error) { next(error); }
+});
 
 app.get("/api/classes",auth,async(req,res,next)=>{
   try {
