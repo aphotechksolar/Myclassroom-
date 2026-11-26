@@ -283,13 +283,13 @@ app.post("/api/auth/login",(req,res)=>{
   if(!u||!bcrypt.compareSync(req.body.password||"",u.password_hash)) return res.status(401).json({error:"Invalid email or password"});
   const membership=activeMembership(u.id,req.body.institution_id||null);
   if(!membership) return res.status(403).json({error:"This account has no active membership in the selected school."});
-  res.json({user:{id:u.id,name:u.name,email:u.email,role:u.role,phone:u.phone,bio:u.bio,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(u,membership.institution_id)});
+  res.json({user:{id:u.id,name:u.name,email:u.email,role:membership.role==="school_admin"?"admin":membership.role,phone:u.phone,bio:u.bio,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(u,membership.institution_id)});
 });
 app.post("/api/auth/switch-institution",auth,(req,res)=>{
   const membership=activeMembership(req.user.id,String(req.body.institution_id||""));
   if(!membership) return res.status(403).json({error:"No active membership in that institution."});
   const user=db.prepare("SELECT id,name,email,role,phone,bio FROM users WHERE id=?").get(req.user.id);
-  res.json({user:{...user,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(user,membership.institution_id)});
+  res.json({user:{...user,role:membership.role==="school_admin"?"admin":membership.role,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(user,membership.institution_id)});
 });
 app.post("/api/auth/change-password",auth,(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE id=?").get(req.user.id);
@@ -319,12 +319,12 @@ app.post("/api/auth/reset",(req,res)=>{
   db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(bcrypt.hashSync(nextPassword,10),row.user_id);
   db.prepare("UPDATE reset_tokens SET used=1 WHERE id=?").run(row.id); res.json({ok:true});
 });
-app.get("/api/me",auth,(req,res)=>res.json(db.prepare("SELECT id,name,email,role,phone,bio,created_at FROM users WHERE id=?").get(req.user.id)));
+app.get("/api/me",auth,(req,res)=>{const u=db.prepare("SELECT id,name,email,phone,bio,created_at FROM users WHERE id=?").get(req.user.id);res.json({...u,role:req.user.role,institution_id:req.user.institution_id,institution_name:req.user.institution_name,institution_role:req.user.institution_role});});
 app.patch("/api/me",auth,(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE id=?").get(req.user.id);
   const name=req.body.name??u.name, phone=req.body.phone??u.phone, bio=req.body.bio??u.bio;
   db.prepare("UPDATE users SET name=?,phone=?,bio=? WHERE id=?").run(name,phone,bio,u.id);
-  res.json(db.prepare("SELECT id,name,email,role,phone,bio,created_at FROM users WHERE id=?").get(u.id));
+  res.json({...db.prepare("SELECT id,name,email,phone,bio,created_at FROM users WHERE id=?").get(u.id),role:req.user.role,institution_id:req.user.institution_id,institution_name:req.user.institution_name,institution_role:req.user.institution_role});
 });
 
 app.get("/api/admin/stats",auth,roles("admin"),(req,res)=>{
