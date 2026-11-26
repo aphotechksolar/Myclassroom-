@@ -62,7 +62,9 @@ function readCookie(req,name) {
   for (const part of header.split(";")) {
     const index=part.indexOf("=");
     if(index<0) continue;
-    if(part.slice(0,index).trim()===name) return decodeURIComponent(part.slice(index+1).trim());
+    if(part.slice(0,index).trim()===name) {
+      try { return decodeURIComponent(part.slice(index+1).trim()); } catch { return null; }
+    }
   }
   return null;
 }
@@ -446,7 +448,7 @@ app.patch("/api/platform/institutions/:id/status",platformOwner,(req,res)=>{
  res.json({ok:true,id:req.params.id,status});
 });
 
-app.get("/api/auth/csrf",(req,res)=>{
+app.post("/api/auth/csrf",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
   const rawSessionId=readCookie(req,SESSION_COOKIE);
   const session=rawSessionId?sessionStore.get(rawSessionId):null;
@@ -580,7 +582,9 @@ app.post("/api/auth/reset",(req,res)=>{
   const nextPassword=String(req.body.newPassword||"");
   if(nextPassword.length < 10 || nextPassword.length > 128) return res.status(400).json({error:"New password must be between 10 and 128 characters"});
   db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(bcrypt.hashSync(nextPassword,10),row.user_id);
-  db.prepare("UPDATE reset_tokens SET used=1 WHERE id=?").run(row.id); res.json({ok:true});
+  db.prepare("UPDATE reset_tokens SET used=1 WHERE id=?").run(row.id);
+  sessionStore.revokeAllForUser(row.user_id);
+  res.json({ok:true});
 });
 app.get("/api/me",auth,(req,res)=>{const u=db.prepare("SELECT id,name,email,phone,bio,created_at FROM users WHERE id=?").get(req.user.id);res.json({...u,role:req.user.role,institution_id:req.user.institution_id,institution_name:req.user.institution_name,institution_role:req.user.institution_role});});
 app.patch("/api/me",auth,(req,res)=>{
