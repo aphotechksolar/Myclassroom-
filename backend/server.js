@@ -406,11 +406,11 @@ app.get("/api/report-card/:studentId",auth,(req,res)=>{
   const student=db.prepare("SELECT id,name,email FROM users WHERE id=?").get(sid);
   const subjects=db.prepare(`SELECT s.name subject,ROUND(COALESCE(AVG(at.percentage),0),1) average FROM subjects s LEFT JOIN assessments a ON a.class_id=s.class_id LEFT JOIN attempts at ON at.assessment_id=a.id AND at.student_id=? AND at.status='submitted' WHERE s.class_id IN (SELECT class_id FROM enrollments WHERE student_id=?) GROUP BY s.id`).all(sid,sid);
   const att=db.prepare("SELECT COUNT(*) total,SUM(status='present') present,SUM(status='absent') absent,SUM(status='late') late FROM attendance WHERE student_id=?").get(sid);
-  const school=db.prepare("SELECT value FROM school_settings WHERE key='school_name' AND institution_id=?").get(req.user.institution_id)?.value||req.user.institution_name||"MyClassroom Academy";
+  const school=db.prepare("SELECT value FROM institution_settings WHERE key='school_name' AND institution_id=?").get(req.user.institution_id)?.value||req.user.institution_name||"MyClassroom Academy";
   res.json({school,student,subjects,attendance:att});
 });
-app.get("/api/settings",auth,(req,res)=>res.json(Object.fromEntries(db.prepare("SELECT key,value FROM school_settings WHERE institution_id=?").all(req.user.institution_id).map(x=>[x.key,x.value]))));
-app.patch("/api/settings",auth,roles("admin"),(req,res)=>{for(const [k,v] of Object.entries(req.body)){db.prepare("INSERT INTO school_settings(key,value,institution_id) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(k,String(v),req.user.institution_id);}log(req.user.id,"Updated school settings");res.json({ok:true});});
+app.get("/api/settings",auth,(req,res)=>res.json(Object.fromEntries(db.prepare("SELECT key,value FROM institution_settings WHERE institution_id=?").all(req.user.institution_id).map(x=>[x.key,x.value]))));
+app.patch("/api/settings",auth,roles("admin"),(req,res)=>{for(const [k,v] of Object.entries(req.body)){db.prepare("INSERT INTO institution_settings(institution_id,key,value,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(institution_id,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").run(req.user.institution_id,k,String(v));}log(req.user.id,"Updated school settings");res.json({ok:true});});
 
 app.get("/api/dashboard",auth,(req,res)=>{
   if(req.user.role==="admin")return res.json({role:"admin",stats:{users:db.prepare("SELECT COUNT(*) c FROM users").get().c,students:db.prepare("SELECT COUNT(*) c FROM users WHERE role='student'").get().c,teachers:db.prepare("SELECT COUNT(*) c FROM users WHERE role='teacher'").get().c,classes:db.prepare("SELECT COUNT(*) c FROM classes").get().c}});
