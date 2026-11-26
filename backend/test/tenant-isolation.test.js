@@ -233,6 +233,34 @@ test("platform onboarding, login, tenant isolation and suspension are enforced",
   assert.equal(redeemExisting.status, 201, JSON.stringify(redeemExisting.body));
   assert.equal(redeemExisting.body.user.role, "parent");
 
+  const ambiguousLogin = await request("/api/auth/login", {
+    method: "POST",
+    body: { email: "existing.guardian@example.test", password: "ExistingPassword!2026" }
+  });
+  assert.equal(ambiguousLogin.status, 409, "accounts with multiple active school memberships must choose a school");
+  assert.equal(ambiguousLogin.body.requiresInstitutionSelection, true);
+  assert.deepEqual(
+    ambiguousLogin.body.institutions.map(item => item.institution_id).sort(),
+    [schoolA.institution.id, schoolB.institution.id].sort()
+  );
+
+  const loginSchoolA = await request("/api/auth/login", {
+    method: "POST",
+    body: { email: "existing.guardian@example.test", password: "ExistingPassword!2026", institution_id: schoolA.institution.id }
+  });
+  assert.equal(loginSchoolA.status, 200, JSON.stringify(loginSchoolA.body));
+  assert.equal(loginSchoolA.body.user.institution_id, schoolA.institution.id);
+  assert.equal(loginSchoolA.body.user.institution_role, "parent");
+
+  const loginSchoolB = await request("/api/auth/login", {
+    method: "POST",
+    body: { email: "existing.guardian@example.test", password: "ExistingPassword!2026", institution_id: schoolB.institution.id }
+  });
+  assert.equal(loginSchoolB.status, 200, JSON.stringify(loginSchoolB.body));
+  assert.equal(loginSchoolB.body.user.institution_id, schoolB.institution.id);
+  assert.equal(loginSchoolB.body.user.institution_role, "student");
+
+
   const suspended = await request(`/api/platform/institutions/${schoolA.institution.id}/status`, {
     method: "PATCH",
     platform: true,
