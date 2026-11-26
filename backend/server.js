@@ -11,6 +11,7 @@ const { createAnnouncementsRepository } = require("./repositories/announcements"
 const { createMessagesRepository } = require("./repositories/messages");
 const { createClassesRepository } = require("./repositories/classes");
 const { createLearningContentRepository } = require("./repositories/learning-content");
+const { createSubmissionRepository } = require("./repositories/submissions");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const helmet = require("helmet");
@@ -50,6 +51,7 @@ const announcementsRepository = createAnnouncementsRepository(asyncDb);
 const messagesRepository = createMessagesRepository(asyncDb);
 const classesRepository = createClassesRepository(asyncDb);
 const learningContentRepository = createLearningContentRepository(asyncDb);
+const submissionRepository = createSubmissionRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -543,15 +545,15 @@ app.get("/api/submissions",auth,async(req,res,next)=>{
     res.json(rows);
   }catch(error){next(error);}
 });
-app.patch("/api/submissions/:id/grade",auth,roles("admin","teacher"),(req,res)=>{
-  const sub=db.prepare(`SELECT s.*,a.teacher_id,a.class_id,c.teacher_id class_teacher_id,c.institution_id
-    FROM submissions s JOIN assignments a ON a.id=s.assignment_id JOIN classes c ON c.id=a.class_id
-    WHERE s.id=? AND c.institution_id=?`).get(req.params.id,req.user.institution_id);
-  if(!sub)return res.status(404).json({error:"Submission not found in this school"});
-  if(req.user.institution_role==="teacher"&&sub.teacher_id!==req.user.id&&sub.class_teacher_id!==req.user.id)return res.status(403).json({error:"Not allowed"});
-  db.prepare("UPDATE submissions SET score=?,feedback=? WHERE id=?").run(Number(req.body.score),req.body.feedback||"",sub.id);
-  notify(sub.student_id,"Assignment graded","Your "+db.prepare("SELECT title FROM assignments WHERE id=?").get(sub.assignment_id).title+" has been graded.",req.user.institution_id);
-  res.json({ok:true});
+app.patch("/api/submissions/:id/grade",auth,roles("admin","teacher"),async(req,res,next)=>{
+  try{
+    const result=await submissionRepository.gradeSubmission({
+      userId:req.user.id,institutionId:req.user.institution_id,role:req.user.institution_role,
+      submissionId:req.params.id,score:req.body.score,feedback:req.body.feedback||""
+    });
+    notify(result.studentId,"Assignment graded","Your "+result.assignmentTitle+" has been graded.",req.user.institution_id);
+    res.json({ok:true});
+  }catch(error){next(error);}
 });
 
 app.post("/api/assessments",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id);if(!c)return res.status(403).json({error:"Not allowed"});let questions;try{questions=normalizeQuestions(req.body.questions);}catch(e){return res.status(400).json({error:e.message});}if(!questions.length)return res.status(400).json({error:"Add at least one valid question"});const r=db.prepare("INSERT INTO assessments(title,type,duration_minutes,class_id,teacher_id,pass_mark,questions_json) VALUES(?,?,?,?,?,?,?)").run(req.body.title,req.body.type||"quiz",Number(req.body.duration_minutes||20),c.id,req.user.id,Number(req.body.pass_mark||50),JSON.stringify(questions));db.prepare("SELECT student_id FROM enrollments WHERE class_id=?").all(c.id).forEach(s=>notify(s.student_id,"New assessment",req.body.title,req.user.institution_id));res.json({id:r.lastInsertRowid});});
