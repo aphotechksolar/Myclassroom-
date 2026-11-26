@@ -84,7 +84,7 @@ function createAssessmentsRepository(database) {
     if (!Number.isSafeInteger(Number(input.assessmentId)) || Number(input.assessmentId) <= 0) {
       throw new TypeError("A valid assessment ID is required");
     }
-    return database.transaction(async (tx) => {
+    const result = await database.transaction(async (tx) => {
       const assessment = await tx.one(
         "SELECT a.id, a.duration_minutes, a.questions_json FROM assessments a JOIN classes c ON c.id = a.class_id JOIN enrollments e ON e.class_id = c.id AND e.student_id = $2 WHERE a.id = $1 AND c.institution_id = $3",
         [Number(input.assessmentId), id, input.institutionId]
@@ -117,10 +117,7 @@ function createAssessmentsRepository(database) {
           [attempt.id, id]
         );
         const expired = await tx.one("SELECT * FROM attempts WHERE id = $1 AND student_id = $2", [attempt.id, id]);
-        const error = new Error("Assessment time has expired");
-        error.status = 400;
-        error.attempt = { ...expired, timed_out: true };
-        throw error;
+        return { __expiredAttempt: { ...expired, timed_out: true } };
       }
       if (!attempt) {
         const duration = Number(assessment.duration_minutes || 20);
@@ -142,6 +139,13 @@ function createAssessmentsRepository(database) {
         }))
       };
     });
+    if (result && result.__expiredAttempt) {
+      const error = new Error("Assessment time has expired");
+      error.status = 400;
+      error.attempt = result.__expiredAttempt;
+      throw error;
+    }
+    return result;
   }
 
   async function submitAttempt(input) {
