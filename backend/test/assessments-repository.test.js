@@ -24,7 +24,7 @@ function setup() {
       score REAL DEFAULT 0, percentage REAL DEFAULT 0, status TEXT DEFAULT 'in_progress',
       answers_json TEXT DEFAULT '{}', UNIQUE(assessment_id, student_id)
     );
-    INSERT INTO users VALUES (1, 'Teacher One'), (2, 'Teacher Two');
+    INSERT INTO users VALUES (1, 'Teacher One'), (2, 'Teacher Two'), (101, 'Student A'), (102, 'Student B');
     INSERT INTO classes VALUES
       (10, 'A Biology', 1, 'school-a'),
       (11, 'A Chemistry', 2, 'school-a'),
@@ -390,5 +390,67 @@ test("assessment creation rejects malformed or ambiguous questions instead of si
     }
     const count = await database.one("SELECT COUNT(*) AS count FROM assessments");
     assert.equal(count.count, 3);
+  } finally { await database.close(); }
+});
+
+test("assessment results are limited to the student's own school attempts", async () => {
+  const { database, repository } = setup();
+  try {
+    await database.execute(
+      "INSERT INTO attempts (id,assessment_id,student_id,percentage,status) VALUES ($1,$2,$3,$4,$5)",
+      [1,20,101,85,"submitted"]
+    );
+    await database.execute(
+      "INSERT INTO attempts (id,assessment_id,student_id,percentage,status) VALUES ($1,$2,$3,$4,$5)",
+      [2,21,102,70,"submitted"]
+    );
+    await database.execute(
+      "INSERT INTO attempts (id,assessment_id,student_id,percentage,status) VALUES ($1,$2,$3,$4,$5)",
+      [3,22,101,95,"submitted"]
+    );
+    const rows = await repository.listResultsForUser(101,"school-a","student");
+    assert.deepEqual(rows.map(row=>row.id),[1]);
+    assert.equal(rows[0].student_name,"Student A");
+    assert.equal(rows[0].class_name,"A Biology");
+  } finally { await database.close(); }
+});
+
+test("teachers see only attempts for assessments they own or classes they teach", async () => {
+  const { database, repository } = setup();
+  try {
+    await database.execute(
+      "INSERT INTO attempts (id,assessment_id,student_id,percentage,status) VALUES ($1,$2,$3,$4,$5)",
+      [1,20,101,85,"submitted"]
+    );
+    await database.execute(
+      "INSERT INTO attempts (id,assessment_id,student_id,percentage,status) VALUES ($1,$2,$3,$4,$5)",
+      [2,21,102,70,"submitted"]
+    );
+    const rows = await repository.listResultsForUser(1,"school-a","teacher");
+    assert.deepEqual(rows.map(row=>row.id),[1]);
+  } finally { await database.close(); }
+});
+
+test("school admins see institution results while parent and unknown roles are denied", async () => {
+  const { database, repository } = setup();
+  try {
+    await database.execute(
+      "INSERT INTO attempts (id,assessment_id,student_id,percentage,status) VALUES ($1,$2,$3,$4,$5)",
+      [1,20,101,85,"submitted"]
+    );
+    await database.execute(
+      "INSERT INTO attempts (id,assessment_id,student_id,percentage,status) VALUES ($1,$2,$3,$4,$5)",
+      [2,21,102,70,"submitted"]
+    );
+    await database.execute(
+      "INSERT INTO attempts (id,assessment_id,student_id,percentage,status) VALUES ($1,$2,$3,$4,$5)",
+      [3,22,101,95,"submitted"]
+    );
+    const rows = await repository.listResultsForUser(900,"school-a","school_admin");
+    assert.deepEqual(rows.map(row=>row.id),[2,1]);
+    await assert.rejects(
+      repository.listResultsForUser(300,"school-a","parent"),
+      error=>error.status===403
+    );
   } finally { await database.close(); }
 });
