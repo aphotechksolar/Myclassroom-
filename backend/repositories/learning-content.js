@@ -125,6 +125,34 @@ function createLearningContentRepository(database) {
          ORDER BY a.due_date`,
         [institutionId, ...visibility.params]
       );
+    },
+
+    async listSubmissionsForUser(userId, institutionId, role) {
+      const id = validateScope(userId, institutionId, role);
+      let visibility = "";
+      let params = [institutionId, institutionId];
+      if (role === "student") {
+        visibility = " AND s.student_id = $3";
+        params.push(id);
+      } else if (role === "teacher") {
+        visibility = " AND (a.teacher_id = $3 OR c.teacher_id = $3)";
+        params.push(id);
+      }
+
+      return database.many(
+        `SELECT s.*, a.title, a.max_score, a.class_id, u.name student_name, u.email
+         FROM submissions s
+         JOIN assignments a ON a.id = s.assignment_id
+         JOIN classes c ON c.id = a.class_id
+         JOIN users u ON u.id = s.student_id
+         JOIN institution_memberships m
+           ON m.user_id = u.id
+          AND m.institution_id = $1
+          AND m.status = 'active'
+         WHERE c.institution_id = $2${visibility}
+         ORDER BY s.id DESC`,
+        params
+      );
     }
   });
 }
