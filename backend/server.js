@@ -9,6 +9,7 @@ const { createSettingsRepository } = require("./repositories/settings");
 const { createNotificationsRepository } = require("./repositories/notifications");
 const { createAnnouncementsRepository } = require("./repositories/announcements");
 const { createMessagesRepository } = require("./repositories/messages");
+const { createClassesRepository } = require("./repositories/classes");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const helmet = require("helmet");
@@ -46,6 +47,7 @@ const settingsRepository = createSettingsRepository(asyncDb);
 const notificationsRepository = createNotificationsRepository(asyncDb);
 const announcementsRepository = createAnnouncementsRepository(asyncDb);
 const messagesRepository = createMessagesRepository(asyncDb);
+const classesRepository = createClassesRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -440,12 +442,11 @@ app.delete("/api/admin/users/:id",auth,roles("admin"),(req,res)=>{
 });
 app.get("/api/audit",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT a.*,u.name actor_name FROM audit_log a LEFT JOIN users u ON u.id=a.actor_id WHERE a.institution_id=? ORDER BY a.id DESC LIMIT 100").all(req.user.institution_id)));
 
-app.get("/api/classes",auth,(req,res)=>{
-  let rows;
-  if(req.user.institution_role==="school_admin") rows=db.prepare("SELECT c.*,u.name teacher_name,(SELECT COUNT(*) FROM enrollments e WHERE e.class_id=c.id) student_count FROM classes c LEFT JOIN users u ON u.id=c.teacher_id WHERE c.institution_id=? ORDER BY c.name").all(req.user.institution_id);
-  else if(req.user.institution_role==="teacher") rows=db.prepare("SELECT c.*,u.name teacher_name,(SELECT COUNT(*) FROM enrollments e WHERE e.class_id=c.id) student_count FROM classes c LEFT JOIN users u ON u.id=c.teacher_id WHERE c.institution_id=? AND c.teacher_id=? ORDER BY c.name").all(req.user.institution_id,req.user.id);
-  else rows=db.prepare("SELECT c.*,u.name teacher_name FROM classes c JOIN enrollments e ON e.class_id=c.id LEFT JOIN users u ON u.id=c.teacher_id WHERE c.institution_id=? AND e.student_id=? ORDER BY c.name").all(req.user.institution_id,req.user.id);
-  res.json(rows);
+app.get("/api/classes",auth,async(req,res,next)=>{
+  try {
+    const rows=await classesRepository.listForUser(req.user.id,req.user.institution_id,req.user.institution_role);
+    res.json(rows);
+  } catch(error) { next(error); }
 });
 app.post("/api/classes",auth,roles("admin","teacher"),(req,res)=>{
   const code=(req.body.code||("MC"+Math.random().toString(36).slice(2,8))).toUpperCase();
@@ -488,7 +489,12 @@ app.get("/api/students",auth,roles("admin","teacher"),(req,res)=>{
 app.get("/api/teachers",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE m.institution_id=? AND m.role='teacher' AND m.status='active' ORDER BY u.name").all(req.user.institution_id)));
 
 app.post("/api/subjects",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id); if(!c)return res.status(403).json({error:"Not allowed"}); const r=db.prepare("INSERT INTO subjects(name,class_id,teacher_id) VALUES(?,?,?)").run(req.body.name,c.id,req.user.id); res.json(db.prepare("SELECT * FROM subjects WHERE id=?").get(r.lastInsertRowid));});
-app.get("/api/subjects",auth,(req,res)=>{const rows=req.user.institution_role==="student"?db.prepare("SELECT s.*,c.name class_name FROM subjects s LEFT JOIN classes c ON c.id=s.class_id JOIN enrollments e ON e.class_id=s.class_id WHERE c.institution_id=? AND e.student_id=?").all(req.user.institution_id,req.user.id):req.user.institution_role==="teacher"?db.prepare("SELECT s.*,c.name class_name FROM subjects s LEFT JOIN classes c ON c.id=s.class_id WHERE c.institution_id=? AND (s.teacher_id=? OR c.teacher_id=?)").all(req.user.institution_id,req.user.id,req.user.id):db.prepare("SELECT s.*,c.name class_name FROM subjects s LEFT JOIN classes c ON c.id=s.class_id WHERE c.institution_id=?").all(req.user.institution_id); res.json(rows);});
+app.get("/api/subjects",auth,async(req,res,next)=>{
+  try {
+    const rows=await classesRepository.listSubjectsForUser(req.user.id,req.user.institution_id,req.user.institution_role);
+    res.json(rows);
+  } catch(error) { next(error); }
+});
 app.post("/api/timetable",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id);if(!c)return res.status(403).json({error:"Not allowed"});const subjectId=req.body.subject_id||null;if(subjectId&&!db.prepare("SELECT 1 FROM subjects WHERE id=? AND class_id=?").get(subjectId,c.id))return res.status(400).json({error:"Subject must belong to this class"});const r=db.prepare("INSERT INTO timetable(class_id,subject_id,day,start_time,end_time,room) VALUES(?,?,?,?,?,?)").run(c.id,subjectId,req.body.day,req.body.start_time,req.body.end_time,req.body.room||"");res.json({id:r.lastInsertRowid});});
 app.get("/api/timetable",auth,(req,res)=>{let sql=`SELECT t.*,c.name class_name,s.name subject_name FROM timetable t LEFT JOIN classes c ON c.id=t.class_id LEFT JOIN subjects s ON s.id=t.subject_id`;let rows;if(req.user.institution_role==="student") rows=db.prepare(sql+" JOIN enrollments e ON e.class_id=t.class_id WHERE c.institution_id=? AND e.student_id=? ORDER BY CASE t.day WHEN 'Monday' THEN 1 WHEN 'Tuesday' THEN 2 WHEN 'Wednesday' THEN 3 WHEN 'Thursday' THEN 4 WHEN 'Friday' THEN 5 ELSE 6 END,t.start_time").all(req.user.institution_id,req.user.id);else if(req.user.institution_role==="teacher")rows=db.prepare(sql+" WHERE c.institution_id=? AND (c.teacher_id=? OR t.subject_id IN (SELECT id FROM subjects WHERE teacher_id=?)) ORDER BY t.day,t.start_time").all(req.user.institution_id,req.user.id,req.user.id);else rows=db.prepare(sql+" WHERE c.institution_id=? ORDER BY t.day,t.start_time").all(req.user.institution_id);res.json(rows);});
 
