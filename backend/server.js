@@ -816,7 +816,19 @@ app.get("/api/export/gradebook.csv",auth,roles("admin","teacher"),(req,res)=>{
   res.type("text/csv").send(csv);
 });
 
-app.post("/api/attendance",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id);if(!c)return res.status(403).json({error:"Not allowed"});const student=db.prepare("SELECT 1 FROM institution_memberships WHERE institution_id=? AND user_id=? AND role='student' AND status='active'").get(req.user.institution_id,req.body.student_id);if(!student||!db.prepare("SELECT 1 FROM enrollments WHERE class_id=? AND student_id=?").get(c.id,req.body.student_id))return res.status(400).json({error:"Student is not enrolled in this class"});db.prepare("INSERT INTO attendance(class_id,student_id,date,status) VALUES(?,?,?,?) ON CONFLICT(class_id,student_id,date) DO UPDATE SET status=excluded.status").run(c.id,req.body.student_id,req.body.date,req.body.status||"present");res.json({ok:true});});
+app.post("/api/attendance",auth,roles("admin","teacher"),async(req,res,next)=>{
+  try {
+    const result=await attendanceRepository.recordForClass({
+      userId:req.user.id,institutionId:req.user.institution_id,role:req.user.institution_role,
+      classId:req.body.class_id,studentId:req.body.student_id,date:req.body.date,status:req.body.status
+    });
+    if(result===null) return res.status(403).json({error:"Not allowed"});
+    res.json({ok:true});
+  } catch(error) {
+    if(error.status) return res.status(error.status).json({error:error.message});
+    next(error);
+  }
+});
 app.get("/api/attendance/:classId",auth,async(req,res,next)=>{
   try {
     const date=req.query.date||new Date().toISOString().slice(0,10);
