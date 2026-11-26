@@ -40,3 +40,17 @@ Do not onboard real institutions or real learner records until the release block
 - Logout removes only the MyClassroom session keys; it does not clear unrelated data for other applications on the same origin.
 - API access JWTs expire after eight hours. Users must sign in again after expiry.
 - `sessionStorage` reduces persistence on shared devices but is still accessible to JavaScript running on the page. It is not a substitute for a future HttpOnly-cookie session design and strong XSS prevention.
+
+
+## Browser session implementation (PR #42)
+
+The browser authentication path now uses server-side sessions rather than browser-readable JWTs:
+
+- The browser receives a host-only, HttpOnly, SameSite=Lax cookie named __Host-mc_session in production (with Secure and Path=/), and mc_session for local HTTP development.
+- Session identifiers and separate CSRF secrets are 32-byte random values; only SHA-256 hashes are stored.
+- Sessions have an eight-hour absolute expiry. Logout revokes the current session; password changes and password resets revoke all sessions for that account.
+- Unsafe authenticated requests require a per-session CSRF token in X-CSRF-Token. The token is refreshed through a same-origin POST bootstrap endpoint.
+- Production deployments must set APP_ORIGIN to the canonical HTTPS origin (or include it in CORS_ORIGINS) so unsafe requests can pass exact Origin validation.
+- The browser no longer stores or sends an authentication bearer token. Bearer compatibility is restricted to NODE_ENV=test for automated integration fixtures only.
+
+This is still the SQLite session-store implementation. It does not make SQLite or local file storage production-scalable, and it does not replace the planned PostgreSQL/private object-storage migration. Validate HTTPS, cookie behavior, reverse-proxy configuration, backup/restore and session cleanup in the actual hosting environment before onboarding schools.
