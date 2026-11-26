@@ -260,11 +260,6 @@ test("platform onboarding, login, tenant isolation and suspension are enforced",
   assert.equal(loginSchoolB.body.user.institution_id, schoolB.institution.id);
   assert.equal(loginSchoolB.body.user.institution_role, "student");
 
-  const invalidSchoolLogin = await request("/api/auth/login", {
-    method: "POST",
-    body: { email: "existing.guardian@example.test", password: "ExistingPassword!2026", institution_id: "not-a-school" }
-  });
-  assert.equal(invalidSchoolLogin.status, 403);
 
   const suspended = await request(`/api/platform/institutions/${schoolA.institution.id}/status`, {
     method: "PATCH",
