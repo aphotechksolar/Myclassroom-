@@ -134,7 +134,7 @@ function createAssessmentsRepository(database) {
     }
     const result = await database.transaction(async (tx) => {
       const assessment = await tx.one(
-        "SELECT a.id, a.duration_minutes, a.questions_json FROM assessments a JOIN classes c ON c.id = a.class_id JOIN enrollments e ON e.class_id = c.id AND e.student_id = $2 WHERE a.id = $1 AND c.institution_id = $3",
+        "SELECT a.id, a.duration_minutes, a.pass_mark, a.questions_json FROM assessments a JOIN classes c ON c.id = a.class_id JOIN enrollments e ON e.class_id = c.id AND e.student_id = $2 WHERE a.id = $1 AND c.institution_id = $3",
         [Number(input.assessmentId), id, input.institutionId]
       );
       if (!assessment) {
