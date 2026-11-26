@@ -5,7 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "migrate:tenant": "node migrations/001_multi_tenant_foundation.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
