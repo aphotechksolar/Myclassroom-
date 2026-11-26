@@ -600,7 +600,12 @@ app.get("/api/messages",auth,async(req,res,next)=>{
   } catch (error) { next(error); }
 });
 app.post("/api/messages",auth,(req,res)=>{const receiver=db.prepare("SELECT u.id FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE u.id=? AND m.institution_id=? AND m.status='active'").get(req.body.receiver_id,req.user.institution_id);if(!receiver)return res.status(404).json({error:"Recipient not found in this school"});const r=db.prepare("INSERT INTO messages(sender_id,receiver_id,subject,body,institution_id) VALUES(?,?,?,?,?)").run(req.user.id,receiver.id,req.body.subject||"",req.body.body||"",req.user.institution_id);notify(receiver.id,"New message","You have a new message from "+req.user.name,req.user.institution_id);res.json({id:r.lastInsertRowid});});
-app.patch("/api/messages/:id/read",auth,(req,res)=>{db.prepare("UPDATE messages SET read_at=CURRENT_TIMESTAMP WHERE id=? AND receiver_id=? AND institution_id=?").run(req.params.id,req.user.id,req.user.institution_id);res.json({ok:true});});
+app.patch("/api/messages/:id/read",auth,async(req,res,next)=>{
+  try {
+    await messagesRepository.markRead(req.params.id, req.user.id, req.user.institution_id);
+    res.json({ok:true});
+  } catch (error) { next(error); }
+});
 
 app.get("/api/report-card/:studentId",auth,(req,res)=>{
   const sid=Number(req.params.studentId);
