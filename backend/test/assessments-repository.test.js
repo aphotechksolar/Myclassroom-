@@ -31,7 +31,7 @@ function setup() {
       (12, 'B Biology', 1, 'school-b');
     INSERT INTO enrollments VALUES (1, 10, 101), (2, 11, 102), (3, 12, 101);
     INSERT INTO assessments VALUES
-      (20, 'A Biology Quiz', 'quiz', 20, 10, 1, 50, '[{"question":"Q1"},{"question":"Q2"}]', '2026-01-01'),
+      (20, 'A Biology Quiz', 'quiz', 20, 10, 1, 50, '[{"question":"Q1","options":["Correct","Wrong"],"answer":0},{"question":"Q2","options":["Wrong","Correct"],"answer":1}]', '2026-01-01'),
       (21, 'A Chemistry Exam', 'exam', 60, 11, 2, 40, '[{"question":"Q1"}]', '2026-01-02'),
       (22, 'B Biology Quiz', 'quiz', 20, 12, 1, 50, '[]', '2026-01-03');
   `);
