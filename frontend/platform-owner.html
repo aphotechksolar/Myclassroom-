@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MyClassroom · Platform Owner</title>
+<style>
+:root{font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:#172033;background:#f5f7fb}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1120px;margin:0 auto;padding:28px 18px 60px}.top{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:24px}.brand{font-size:20px;font-weight:800;letter-spacing:-.5px}.muted{color:#667085;font-size:13px}.panel{background:#fff;border:1px solid #e5e9f0;border-radius:16px;padding:22px;margin:16px 0;box-shadow:0 5px 20px #17203308}h1{font-size:25px;margin:0 0 6px}h2{font-size:18px;margin:0 0 16px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.field label{display:block;font-size:12px;font-weight:700;margin-bottom:6px;color:#475467}.field input,.field select,.keyinput{width:100%;padding:11px 12px;border:1px solid #d0d5dd;border-radius:9px;font:inherit;background:#fff}.field.full{grid-column:1/-1}.btn{border:0;border-radius:9px;padding:11px 15px;font-weight:700;cursor:pointer;background:#182b49;color:white}.btn.secondary{background:#edf1f6;color:#182b49}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:16px}.status{font-size:13px;color:#475467;margin-top:12px}.tablewrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:680px}th,td{text-align:left;padding:12px 10px;border-bottom:1px solid #edf0f4;font-size:13px}th{color:#667085;font-size:11px;text-transform:uppercase;letter-spacing:.04em}.pill{padding:4px 8px;border-radius:99px;background:#eef2f6;font-size:11px;font-weight:700}.pill.active{background:#e7f6ed;color:#167344}.pill.suspended{background:#fff0e8;color:#a33e16}.danger{color:#a33e16}.hidden{display:none}@media(max-width:650px){.grid{grid-template-columns:1fr}.field.full{grid-column:auto}.top{align-items:flex-start;flex-direction:column}.panel{padding:17px}}
+</style></head>
+<body><main class="wrap">
+<header class="top"><div><div class="brand">MyClassroom <span class="muted">/ PLATFORM OWNER</span></div><div class="muted">Institution onboarding and platform operations</div></div><button class="btn secondary" id="refresh">Refresh institutions</button></header>
+<section class="panel"><h1>Platform access</h1><p class="muted">Enter the platform-owner key configured on the server. It is used only for requests in this page and is not saved.</p><div class="actions"><input id="key" class="keyinput" type="password" autocomplete="off" placeholder="Platform owner key" style="max-width:440px"><button class="btn" id="connect">Connect</button><button class="btn secondary" id="disconnect">Clear key</button></div><div class="status" id="status" role="status">Not connected.</div></section>
+<section class="panel"><h2>Register an institution</h2><form id="create"><div class="grid">
+<div class="field"><label>Institution name</label><input name="name" required minlength="2" maxlength="120" placeholder="e.g. Bright Future College"></div>
+<div class="field"><label>Unique URL slug</label><input name="slug" required pattern="[a-z0-9][a-z0-9-]{1,58}[a-z0-9]" placeholder="bright-future-college"></div>
+<div class="field"><label>Institution type</label><select name="institution_type"><option value="combined">Combined</option><option value="primary">Primary</option><option value="secondary">Secondary</option><option value="tertiary">Tertiary</option><option value="other">Other</option></select></div>
+<div class="field"><label>Country code</label><input name="country_code" value="NG" pattern="[A-Za-z]{2}" maxlength="2" required></div>
+<div class="field"><label>Timezone</label><input name="timezone" value="Africa/Lagos" required maxlength="80"></div>
+<div class="field"><label>Currency code</label><input name="currency_code" value="NGN" pattern="[A-Za-z]{3}" maxlength="3" required></div>
+<div class="field"><label>Administrator full name</label><input name="admin_name" required minlength="2" maxlength="120"></div>
+<div class="field"><label>Administrator email</label><input name="admin_email" type="email" required></div>
+<div class="field full"><label>Temporary administrator password (minimum 12 characters)</label><input name="admin_password" type="password" required minlength="12" maxlength="128" autocomplete="new-password"></div>
+</div><div class="actions"><button class="btn" type="submit">Create institution and administrator</button></div></form><div class="status" id="createStatus" role="status"></div></section>
+<section class="panel"><h2>Institutions</h2><div class="tablewrap"><table><thead><tr><th>Institution</th><th>Type</th><th>Location</th><th>Members</th><th>Status</th><th>Action</th></tr></thead><tbody id="institutions"><tr><td colspan="6" class="muted">Connect to load institutions.</td></tr></tbody></table></div></section>
+<p class="muted">Keep this page private to authorized operators. Never place the platform-owner key in frontend source code, public documentation, or a GitHub commit. Rotate the key if it is exposed.</p>
+</main>
+<script>
+(() => {
+ let key="";
+ const el=id=>document.getElementById(id);
+ const status=(id,msg)=>el(id).textContent=msg;
+ async function api(path,options={}) {
+  if(!key) throw new Error("Enter the platform-owner key first.");
+  const response=await fetch("/api/platform"+path,{...options,headers:{"Content-Type":"application/json","x-platform-owner-key":key,...(options.headers||{})}});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok) throw new Error(data.error||"Request failed");
+  return data;
+ }
+ async function load(){
+  try {const rows=await api("/institutions");el("institutions").innerHTML=rows.map(x=>'<tr><td><strong>'+esc(x.name)+'</strong><div class="muted">'+esc(x.slug)+'</div></td><td>'+esc(x.institution_type)+'</td><td>'+esc(x.country_code)+' · '+esc(x.currency_code)+'</td><td>'+x.active_members+'</td><td><span class="pill '+esc(x.status)+'">'+esc(x.status)+'</span></td><td>'+(x.id==="legacy-school"?'—':x.status==="active"?'<button class="btn secondary" data-id="'+esc(x.id)+'" data-status="suspended">Suspend</button>':'<button class="btn secondary" data-id="'+esc(x.id)+'" data-status="active">Reactivate</button>')+'</td></tr>').join("")||'<tr><td colspan="6">No institutions found.</td></tr>';status("status","Connected. "+rows.length+" institutions loaded.");}
+  catch(e){status("status",e.message);}
+ }
+ function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+ el("connect").addEventListener("click",async()=>{key=el("key").value.trim();await load();});
+ el("disconnect").addEventListener("click",()=>{key="";el("key").value="";status("status","Key cleared. Not connected.");});
+ el("refresh").addEventListener("click",load);
+ el("create").addEventListener("submit",async e=>{
+  e.preventDefault();const form=new FormData(e.currentTarget);const body=Object.fromEntries(form.entries());
+  try{const result=await api("/institutions",{method:"POST",body:JSON.stringify(body)});status("createStatus","Created "+result.institution.name+". Share the administrator login securely; ask them to change the temporary password immediately.");e.currentTarget.reset();e.currentTarget.elements.country_code.value="NG";e.currentTarget.elements.timezone.value="Africa/Lagos";e.currentTarget.elements.currency_code.value="NGN";await load();}
+  catch(err){status("createStatus",err.message);}
+ });
+ el("institutions").addEventListener("click",async e=>{
+  const button=e.target.closest("button[data-id]");if(!button)return;
+  if(!confirm("Change this institution status to "+button.dataset.status+"?"))return;
+  try{await api("/institutions/"+encodeURIComponent(button.dataset.id)+"/status",{method:"PATCH",body:JSON.stringify({status:button.dataset.status})});await load();}
+  catch(err){status("status",err.message);}
+ });
+})();
+</script></body></html>
