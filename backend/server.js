@@ -689,4 +689,15 @@ app.get("/api/health",(req,res)=>res.json({ok:true,version:"12.0.0"}));
 app.use(express.static(PUBLIC));
 app.get("*",(req,res)=>res.sendFile(path.join(PUBLIC,"index.html")));
 
+// Expire overdue exam attempts using the server clock, even if a student closes the browser.
+const attemptExpirySweep = setInterval(() => {
+  assessmentsRepository.expireOverdueAttempts().catch(error => {
+    console.error("Assessment expiry sweep failed:", error);
+  });
+}, 15000);
+if (typeof attemptExpirySweep.unref === "function") attemptExpirySweep.unref();
+assessmentsRepository.expireOverdueAttempts().catch(error => {
+  console.error("Initial assessment expiry sweep failed:", error);
+});
+
 app.listen(PORT,()=>console.log(`MyClassroom V12 running on http://localhost:${PORT}`));
