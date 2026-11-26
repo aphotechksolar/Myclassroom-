@@ -167,6 +167,11 @@ test("platform onboarding, login, tenant isolation and suspension are enforced",
   });
   assert.equal(studentA.status, 201, JSON.stringify(studentA.body));
   assert.equal(studentA.body.institution_role, "student");
+  const crossSchoolStudentInvite = await request("/api/guardians/invitations", {
+    method: "POST", token: adminB.token,
+    body: { student_id: studentA.body.id, email: "guardian.cross@example.test" }
+  });
+  assert.equal(crossSchoolStudentInvite.status, 404, "a school cannot issue guardian invitations for another school's student");
   const inviteA = await request("/api/guardians/invitations", {
     method: "POST", token: adminA.token,
     body: { student_id: studentA.body.id, email: "guardian.a@example.test" }
@@ -216,6 +221,11 @@ test("platform onboarding, login, tenant isolation and suspension are enforced",
     body: { student_id: studentA.body.id, email: "existing.guardian@example.test" }
   });
   assert.equal(inviteExisting.status, 201);
+  const wrongExistingPassword = await request("/api/auth/guardian/redeem", {
+    method: "POST",
+    body: { token: inviteExisting.body.invitation_token, name: "Existing User", email: "existing.guardian@example.test", password: "WrongPassword!2026" }
+  });
+  assert.equal(wrongExistingPassword.status, 400, "existing accounts must prove password possession before linking");
   const redeemExisting = await request("/api/auth/guardian/redeem", {
     method: "POST",
     body: { token: inviteExisting.body.invitation_token, name: "Existing User", email: "existing.guardian@example.test", password: "ExistingPassword!2026" }
