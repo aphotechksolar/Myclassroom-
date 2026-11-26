@@ -591,7 +591,12 @@ app.get("/api/notifications",auth,async(req,res,next)=>{
     res.json(rows);
   } catch (error) { next(error); }
 });
-app.patch("/api/notifications/:id/read",auth,(req,res)=>{db.prepare("UPDATE notifications SET read_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND institution_id=?").run(req.params.id,req.user.id,req.user.institution_id);res.json({ok:true});});
+app.patch("/api/notifications/:id/read",auth,async(req,res,next)=>{
+  try {
+    await notificationsRepository.markRead(req.params.id, req.user.id, req.user.institution_id);
+    res.json({ok:true});
+  } catch (error) { next(error); }
+});
 
 app.get("/api/messages",auth,async(req,res,next)=>{
   try {
