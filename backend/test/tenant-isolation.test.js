@@ -81,7 +81,7 @@ async function login(email) {
   assert.match(result.body.token, /^[a-f0-9]{64}$/, "test harness exposes only the opaque session identifier");
   assert.match(result.body.csrfToken, /^[a-f0-9]{64}$/, "CSRF token is separate from the session identifier");
   const cookie = result.headers.get("set-cookie") || "";
-  assert.match(cookie, /^mc_session=[a-f0-9]{64}; Path=\\/; HttpOnly; SameSite=Lax; Max-Age=28800$/);
+  assert.match(cookie, /^mc_session=[a-f0-9]{64}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=28800$/);
   assert.doesNotMatch(cookie, /Domain=/, "session cookie remains host-only");
   const blocked = await request("/api/dashboard", { token: result.body.token });
   assert.equal(blocked.status, 403, "temporary-password accounts cannot access protected APIs");
