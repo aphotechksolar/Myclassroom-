@@ -4,7 +4,7 @@ let csrfToken=null;
 async function api(url,opts={}){
  opts={...opts,headers:{...(opts.headers||{})},credentials:"same-origin"};
  const method=String(opts.method||"GET").toUpperCase();
- if(!["GET","HEAD","OPTIONS"].includes(method) && !["/auth/login","/auth/register","/auth/guardian/redeem","/auth/request-reset","/auth/reset"].includes(url)){
+ if(!["GET","HEAD","OPTIONS"].includes(method) && !["/auth/login","/auth/register","/auth/guardian/redeem","/auth/request-reset","/auth/reset","/auth/csrf"].includes(url)){
   if(!csrfToken){const csrfResponse=await fetch("/api/auth/csrf",{method:"POST",credentials:"same-origin",cache:"no-store"});let csrfData={};try{csrfData=await csrfResponse.json()}catch{}if(!csrfResponse.ok)throw new Error(csrfData.error||"Your session has expired. Please sign in again.");csrfToken=csrfData.csrfToken;}
   opts.headers["X-CSRF-Token"]=csrfToken;
  }
@@ -48,7 +48,7 @@ async function boot(){
  if(!$("#app"))return;
  if(!sessionStorage.mc_user)return location.href="/login.html";
  state.user=JSON.parse(sessionStorage.mc_user||"{}");
- try{csrfToken=(await api("/auth/csrf")).csrfToken;}catch{sessionStorage.removeItem("mc_user");return location.href="/login.html";}
+ try{csrfToken=(await api("/auth/csrf",{method:"POST"})).csrfToken;}catch{sessionStorage.removeItem("mc_user");return location.href="/login.html";}
  if(state.user.must_change_password){
   $("#app").innerHTML='<main class="card" style="max-width:520px;margin:8vh auto;padding:28px"><h1>Change your temporary password</h1><p class="muted">Your school administrator created this account. Set a new password before continuing.</p><form id="firstPassword" class="formgrid"><label class="full">Current temporary password<input name="currentPassword" type="password" required autocomplete="current-password"></label><label class="full">New password<input name="newPassword" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><label class="full">Confirm new password<input name="confirmPassword" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><div class="full"><button class="btn">Save new password</button></div></form><p id="passwordError" class="error" role="alert"></p><button class="btn secondary" type="button" onclick="logout()">Log out</button></main>';
   $("#firstPassword").onsubmit=async event=>{event.preventDefault();const values=Object.fromEntries(new FormData(event.currentTarget));if(values.newPassword!==values.confirmPassword){$("#passwordError").textContent="The new passwords do not match.";return;}try{const result=await api("/auth/change-password",{method:"POST",body:JSON.stringify({currentPassword:values.currentPassword,newPassword:values.newPassword})});delete state.user.must_change_password;sessionStorage.mc_user=JSON.stringify(state.user);csrfToken=result.csrfToken;location.reload();}catch(error){$("#passwordError").textContent=error.message;}};
