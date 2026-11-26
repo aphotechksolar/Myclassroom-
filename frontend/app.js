@@ -13,7 +13,8 @@ async function initAuth(){
    const payload={email,password};
    if(institutionId)payload.institution_id=institutionId;
    const d=await api("/auth/login",{method:"POST",body:JSON.stringify(payload)});
-   localStorage.mc_token=d.token;localStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html";
+   if(d.must_change_password)d.user.must_change_password=true;
+    localStorage.mc_token=d.token;localStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html";
   };
   try{await finish("")}
   catch(err){
@@ -35,6 +36,11 @@ async function boot(){
  if(!$("#app"))return;
  if(!token())return location.href="/login.html";
  state.user=JSON.parse(localStorage.mc_user||"{}");
+ if(state.user.must_change_password){
+  $("#app").innerHTML='<main class="card" style="max-width:520px;margin:8vh auto;padding:28px"><h1>Change your temporary password</h1><p class="muted">Your school administrator created this account. Set a new password before continuing.</p><form id="firstPassword" class="formgrid"><label class="full">Current temporary password<input name="currentPassword" type="password" required autocomplete="current-password"></label><label class="full">New password<input name="newPassword" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><label class="full">Confirm new password<input name="confirmPassword" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><div class="full"><button class="btn">Save new password</button></div></form><p id="passwordError" class="error" role="alert"></p><button class="btn secondary" type="button" onclick="logout()">Log out</button></main>';
+  $("#firstPassword").onsubmit=async event=>{event.preventDefault();const values=Object.fromEntries(new FormData(event.currentTarget));if(values.newPassword!==values.confirmPassword){$("#passwordError").textContent="The new passwords do not match.";return;}try{const result=await api("/auth/change-password",{method:"POST",body:JSON.stringify({currentPassword:values.currentPassword,newPassword:values.newPassword})});delete state.user.must_change_password;localStorage.mc_user=JSON.stringify(state.user);localStorage.mc_token=result.token;location.reload();}catch(error){$("#passwordError").textContent=error.message;}};
+  return;
+ }
  $("#app").innerHTML=`<div class="shell"><aside class="side" id="sidebar"><a class="brand" href="#">MyClassroom</a><div class="small" style="color:#aeb9ca">${esc(state.user.role.toUpperCase())} PORTAL</div><div class="nav">
  ${(state.user.role==="parent"?["overview"]:["overview","profile","people","classes","materials","assignments","assessments","attendance","timetable","performance","messages","notifications","reports","admin"].filter(p=>state.user.role==="admin"||p!=="admin")).map(p=>`<button data-page="${p}">${icons[p]||"•"} ${title(p)}</button>`).join("")}
  <button onclick="logout()">↪ Log out</button></div></aside><main class="main"><div class="bar"><div class="bar-heading"><button class="menu-toggle" id="menuToggle" aria-label="Toggle navigation" aria-expanded="false">☰</button><div><h1 id="title">Overview</h1><span class="muted" id="subtitle"></span></div></div><div class="userbox">${esc(state.user.name)} · ${esc(state.user.email)}</div></div><div id="view"></div></main></div><div id="modal" class="modal"></div>`;
