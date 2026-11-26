@@ -28,7 +28,7 @@ function setup() {
     CREATE TABLE institution_memberships (
       user_id INTEGER, institution_id TEXT, status TEXT
     );
-    INSERT INTO users VALUES
+    INSERT INTO users(id, name) VALUES
       (1, 'Teacher One'), (2, 'Teacher Two'),
       (101, 'Student One'), (102, 'Student Two'), (103, 'Inactive Student');
     INSERT INTO classes VALUES
