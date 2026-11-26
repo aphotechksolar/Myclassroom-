@@ -221,7 +221,8 @@ db.prepare("UPDATE audit_log SET institution_id='legacy-school' WHERE institutio
 function activeMembership(userId, institutionId) {
   const sql = `SELECT m.institution_id,m.role,m.status,i.name institution_name,i.status institution_status
     FROM institution_memberships m JOIN institutions i ON i.id=m.institution_id
-    WHERE m.user_id=? AND m.status='active' AND i.status='active'`;
+    WHERE m.user_id=? AND m.status='active' AND i.status='active'
+      AND m.role IN ('school_admin','teacher','student')`;
   return institutionId
     ? db.prepare(sql + " AND m.institution_id=?").get(userId,institutionId)
     : db.prepare(sql + " ORDER BY m.created_at LIMIT 1").get(userId);
@@ -394,7 +395,10 @@ app.post("/api/classes/join",auth,roles("student"),(req,res)=>{
 });
 app.get("/api/classes/:id/students",auth,(req,res)=>{
   if(!classForUser(req.user,req.params.id)) return res.status(403).json({error:"Not allowed"});
-  res.json(db.prepare("SELECT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN enrollments e ON e.student_id=u.id WHERE e.class_id=? ORDER BY u.name").all(req.params.id));
+  const rows=req.user.institution_role==="student"
+    ? db.prepare("SELECT u.id,u.name FROM users u JOIN enrollments e ON e.student_id=u.id JOIN institution_memberships m ON m.user_id=u.id AND m.institution_id=? AND m.status='active' AND m.role='student' WHERE e.class_id=? ORDER BY u.name").all(req.user.institution_id,req.params.id)
+    : db.prepare("SELECT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN enrollments e ON e.student_id=u.id JOIN institution_memberships m ON m.user_id=u.id AND m.institution_id=? AND m.status='active' AND m.role='student' WHERE e.class_id=? ORDER BY u.name").all(req.user.institution_id,req.params.id);
+  res.json(rows);
 });
 app.get("/api/students",auth,roles("admin","teacher"),(req,res)=>{
   const rows=req.user.institution_role==="school_admin"?db.prepare("SELECT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE m.institution_id=? AND m.role='student' AND m.status='active' ORDER BY u.name").all(req.user.institution_id):db.prepare("SELECT DISTINCT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN institution_memberships m ON m.user_id=u.id JOIN enrollments e ON e.student_id=u.id JOIN classes c ON c.id=e.class_id WHERE m.institution_id=? AND m.status='active' AND c.institution_id=? AND c.teacher_id=? ORDER BY u.name").all(req.user.institution_id,req.user.institution_id,req.user.id);
