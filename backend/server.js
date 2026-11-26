@@ -13,6 +13,7 @@ const { createClassesRepository } = require("./repositories/classes");
 const { createLearningContentRepository } = require("./repositories/learning-content");
 const { createSubmissionRepository } = require("./repositories/submissions");
 const { createAssessmentsRepository } = require("./repositories/assessments");
+const { createTimetableRepository } = require("./repositories/timetable");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const { validateMaterialUpload } = require("./uploads/validation");
@@ -55,6 +56,7 @@ const classesRepository = createClassesRepository(asyncDb);
 const learningContentRepository = createLearningContentRepository(asyncDb);
 const submissionRepository = createSubmissionRepository(asyncDb);
 const assessmentsRepository = createAssessmentsRepository(asyncDb);
+const timetableRepository = createTimetableRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -626,8 +628,8 @@ app.get("/api/subjects",auth,async(req,res,next)=>{
     res.json(rows);
   } catch(error) { next(error); }
 });
-app.post("/api/timetable",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id);if(!c)return res.status(403).json({error:"Not allowed"});const subjectId=req.body.subject_id||null;if(subjectId&&!db.prepare("SELECT 1 FROM subjects WHERE id=? AND class_id=?").get(subjectId,c.id))return res.status(400).json({error:"Subject must belong to this class"});const r=db.prepare("INSERT INTO timetable(class_id,subject_id,day,start_time,end_time,room) VALUES(?,?,?,?,?,?)").run(c.id,subjectId,req.body.day,req.body.start_time,req.body.end_time,req.body.room||"");res.json({id:r.lastInsertRowid});});
-app.get("/api/timetable",auth,(req,res)=>{let sql=`SELECT t.*,c.name class_name,s.name subject_name FROM timetable t LEFT JOIN classes c ON c.id=t.class_id LEFT JOIN subjects s ON s.id=t.subject_id`;let rows;if(req.user.institution_role==="student") rows=db.prepare(sql+" JOIN enrollments e ON e.class_id=t.class_id WHERE c.institution_id=? AND e.student_id=? ORDER BY CASE t.day WHEN 'Monday' THEN 1 WHEN 'Tuesday' THEN 2 WHEN 'Wednesday' THEN 3 WHEN 'Thursday' THEN 4 WHEN 'Friday' THEN 5 ELSE 6 END,t.start_time").all(req.user.institution_id,req.user.id);else if(req.user.institution_role==="teacher")rows=db.prepare(sql+" WHERE c.institution_id=? AND (c.teacher_id=? OR t.subject_id IN (SELECT id FROM subjects WHERE teacher_id=?)) ORDER BY t.day,t.start_time").all(req.user.institution_id,req.user.id,req.user.id);else rows=db.prepare(sql+" WHERE c.institution_id=? ORDER BY t.day,t.start_time").all(req.user.institution_id);res.json(rows);});
+app.post("/api/timetable",auth,roles("admin","teacher"),async(req,res,next)=>{try{const result=await timetableRepository.create({userId:req.user.id,institutionId:req.user.institution_id,role:req.user.institution_role,classId:req.body.class_id,subjectId:req.body.subject_id,day:req.body.day,startTime:req.body.start_time,endTime:req.body.end_time,room:req.body.room});res.json(result);}catch(error){if(/not found in this school|assigned classes|belong to this class/.test(error.message))return res.status(403).json({error:error.message});if(error instanceof TypeError)return res.status(400).json({error:error.message});next(error);}});
+app.get("/api/timetable",auth,async(req,res,next)=>{try{const rows=await timetableRepository.listForUser(req.user.id,req.user.institution_id,req.user.institution_role);res.json(rows);}catch(error){next(error);}});
 
 const upload=multer({storage:storage.multerStorage(),limits:{fileSize:10*1024*1024}});
 app.post("/api/materials",auth,roles("admin","teacher"),upload.single("file"),validateMaterialUpload,async(req,res,next)=>{
