@@ -176,6 +176,35 @@ db.exec(`
     PRIMARY KEY(institution_id,key),
     FOREIGN KEY(institution_id) REFERENCES institutions(id) ON DELETE CASCADE
   );
+  CREATE TABLE IF NOT EXISTS guardian_invitations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    institution_id TEXT NOT NULL,
+    student_id INTEGER NOT NULL,
+    email TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    created_by INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(institution_id) REFERENCES institutions(id) ON DELETE CASCADE,
+    FOREIGN KEY(student_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS guardian_student_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    institution_id TEXT NOT NULL,
+    guardian_id INTEGER NOT NULL,
+    student_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'verified' CHECK(status IN ('verified','revoked')),
+    verified_by INTEGER NOT NULL,
+    verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(institution_id,guardian_id,student_id),
+    FOREIGN KEY(institution_id) REFERENCES institutions(id) ON DELETE CASCADE,
+    FOREIGN KEY(guardian_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(student_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(verified_by) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_guardian_links_guardian ON guardian_student_links(institution_id,guardian_id,status);
 `);
 function ensureTenantColumn(table,column,definition){
   const columns=db.prepare(`PRAGMA table_info(${table})`).all();
@@ -239,7 +268,7 @@ function activeMembership(userId, institutionId) {
   const sql = `SELECT m.institution_id,m.role,m.status,i.name institution_name,i.status institution_status
     FROM institution_memberships m JOIN institutions i ON i.id=m.institution_id
     WHERE m.user_id=? AND m.status='active' AND i.status='active'
-      AND m.role IN ('school_admin','teacher','student')`;
+      AND m.role IN ('school_admin','teacher','student','parent')`;
   return institutionId
     ? db.prepare(sql + " AND m.institution_id=?").get(userId,institutionId)
     : db.prepare(sql + " ORDER BY m.created_at LIMIT 1").get(userId);
@@ -255,6 +284,9 @@ function auth(req,res,next){
     req.user.institution_id=membership.institution_id;
     req.user.institution_role=membership.role;
     req.user.institution_name=membership.institution_name;
+    if(membership.role==="parent" && !/^\/api\/guardian\/(children(?:\/\d+\/performance)?)?$/.test(req.path)) {
+      return res.status(403).json({error:"Parent accounts can only access their verified children's information."});
+    }
     next();
   } catch(e){ return res.status(401).json({error:"Invalid or expired token"}); }
 }
@@ -374,6 +406,39 @@ app.post("/api/auth/register",(req,res)=>{
       .run(institution.id,u.id,safeRole);
     res.json({user:u,token:sign(u)});
   }catch(e){res.status(400).json({error:"Email already exists"});}
+});
+app.post("/api/auth/guardian/redeem",(req,res)=>{
+  const token=String(req.body.token||"").trim();
+  const email=String(req.body.email||"").trim().toLowerCase();
+  const name=String(req.body.name||"").trim();
+  const password=String(req.body.password||"");
+  if(token.length<32||token.length>256||! /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||name.length<2||name.length>120||password.length<10||password.length>128) {
+    return res.status(400).json({error:"Provide a valid invitation, name, email and password (10-128 characters)."});
+  }
+  const tokenHash=require("crypto").createHash("sha256").update(token).digest("hex");
+  const invitation=db.prepare("SELECT * FROM guardian_invitations WHERE token_hash=? AND email=? AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP").get(tokenHash,email);
+  if(!invitation) return res.status(400).json({error:"Invitation is invalid, expired, already used or does not match this email."});
+  try {
+    const redeem=db.transaction(()=>{
+      let user=db.prepare("SELECT * FROM users WHERE email=?").get(email);
+      if(!user) {
+        const created=db.prepare("INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,'student')").run(name,email,bcrypt.hashSync(password,12));
+        user=db.prepare("SELECT * FROM users WHERE id=?").get(created.lastInsertRowid);
+      } else if(!db.prepare("SELECT 1 FROM institution_memberships WHERE institution_id=? AND user_id=? AND role='parent'").get(invitation.institution_id,user.id)) {
+        throw new Error("This email already belongs to an account that is not a parent in this school. Contact the school.");
+      }
+      const membership=db.prepare("SELECT role,status FROM institution_memberships WHERE institution_id=? AND user_id=?").get(invitation.institution_id,user.id);
+      if(membership && (membership.role!=="parent" || membership.status!=="active")) throw new Error("This account already has a different or inactive role in this school.");
+      db.prepare("INSERT OR IGNORE INTO institution_memberships(institution_id,user_id,role,status) VALUES(?,?,'parent','active')").run(invitation.institution_id,user.id);
+      db.prepare("INSERT OR IGNORE INTO guardian_student_links(institution_id,guardian_id,student_id,status,verified_by) VALUES(?,?,?,'verified',?)").run(invitation.institution_id,user.id,invitation.student_id,invitation.created_by);
+      db.prepare("UPDATE guardian_invitations SET used_at=CURRENT_TIMESTAMP WHERE id=? AND used_at IS NULL").run(invitation.id);
+      return user;
+    });
+    const user=redeem();
+    res.status(201).json({user:{id:user.id,name:user.name,email:user.email,role:"parent",institution_id:invitation.institution_id},token:sign(user,invitation.institution_id)});
+  } catch(e) {
+    res.status(400).json({error:e.message||"Could not redeem invitation"});
+  }
 });
 app.post("/api/auth/login",(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE email=?").get(String(req.body.email||"").trim().toLowerCase());
@@ -674,6 +739,59 @@ app.patch("/api/settings",auth,roles("admin"),async(req,res,next)=>{
     log(req.user.id,"Updated school settings","",req.user.institution_id);
     res.json({ok:true});
   } catch (error) { next(error); }
+});
+
+// Guardian access is provisioned only by a school administrator after offline identity/relationship checks.
+app.post("/api/guardians/invitations",auth,roles("admin"),(req,res)=>{
+  const studentId=Number(req.body.student_id);
+  const email=String(req.body.email||"").trim().toLowerCase();
+  if(!Number.isSafeInteger(studentId)||studentId<=0||! /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({error:"A valid student_id and guardian email are required."});
+  const student=db.prepare("SELECT u.id FROM users u JOIN institution_memberships m ON m.user_id=u.id AND m.institution_id=? AND m.role='student' AND m.status='active' WHERE u.id=? AND u.role='student'").get(req.user.institution_id,studentId);
+  if(!student) return res.status(404).json({error:"Student not found in this school."});
+  const crypto=require("crypto");
+  const rawToken=crypto.randomBytes(32).toString("hex");
+  const tokenHash=crypto.createHash("sha256").update(rawToken).digest("hex");
+  const expiresAt=new Date(Date.now()+7*24*60*60*1000).toISOString();
+  db.prepare("INSERT INTO guardian_invitations(institution_id,student_id,email,token_hash,expires_at,created_by) VALUES(?,?,?,?,?,?)")
+    .run(req.user.institution_id,studentId,email,tokenHash,expiresAt,req.user.id);
+  log(req.user.id,"Created guardian invitation",JSON.stringify({student_id:studentId,email}),req.user.institution_id);
+  res.status(201).json({ok:true,invitation_token:rawToken,expires_at:expiresAt,delivery:"Share this one-time token privately with the verified guardian. It is not emailed automatically."});
+});
+app.get("/api/guardian/children",auth,(req,res)=>{
+  if(req.user.institution_role!=="parent") return res.status(403).json({error:"Parent access required."});
+  const children=db.prepare(`SELECT u.id,u.name,
+    (SELECT GROUP_CONCAT(c.name, ', ') FROM enrollments e JOIN classes c ON c.id=e.class_id WHERE e.student_id=u.id AND c.institution_id=?) class_names
+    FROM guardian_student_links l JOIN users u ON u.id=l.student_id
+    JOIN institution_memberships m ON m.user_id=u.id AND m.institution_id=l.institution_id AND m.role='student' AND m.status='active'
+    WHERE l.institution_id=? AND l.guardian_id=? AND l.status='verified' ORDER BY u.name`)
+    .all(req.user.institution_id,req.user.institution_id,req.user.id);
+  res.json(children);
+});
+app.get("/api/guardian/children/:id/performance",auth,(req,res)=>{
+  if(req.user.institution_role!=="parent") return res.status(403).json({error:"Parent access required."});
+  const studentId=Number(req.params.id);
+  const link=db.prepare("SELECT 1 FROM guardian_student_links WHERE institution_id=? AND guardian_id=? AND student_id=? AND status='verified'").get(req.user.institution_id,req.user.id,studentId);
+  if(!link) return res.status(404).json({error:"Verified child not found."});
+  const student=db.prepare("SELECT id,name FROM users WHERE id=?").get(studentId);
+  const results=db.prepare(`SELECT a.title,a.type,at.percentage,at.status,at.submitted_at
+    FROM attempts at JOIN assessments a ON a.id=at.assessment_id JOIN classes c ON c.id=a.class_id
+    WHERE at.student_id=? AND c.institution_id=? AND at.status IN ('submitted','expired') ORDER BY at.id DESC LIMIT 100`).all(studentId,req.user.institution_id);
+  const attendance=db.prepare(`SELECT att.status,COUNT(*) count FROM attendance att JOIN classes c ON c.id=att.class_id
+    WHERE att.student_id=? AND c.institution_id=? GROUP BY att.status`).all(studentId,req.user.institution_id);
+  const assignments=db.prepare(`SELECT a.title,a.due_date,s.score,s.feedback,s.submitted_at
+    FROM assignments a JOIN classes c ON c.id=a.class_id
+    LEFT JOIN submissions s ON s.assignment_id=a.id AND s.student_id=?
+    JOIN enrollments e ON e.class_id=c.id AND e.student_id=?
+    WHERE c.institution_id=? ORDER BY a.due_date DESC LIMIT 100`).all(studentId,studentId,req.user.institution_id);
+  res.json({student,results,attendance,assignments});
+});
+app.delete("/api/guardians/children/:id",auth,roles("admin"),(req,res)=>{
+  const studentId=Number(req.params.id);
+  const guardianId=Number(req.body.guardian_id);
+  const changed=db.prepare("UPDATE guardian_student_links SET status='revoked' WHERE institution_id=? AND guardian_id=? AND student_id=? AND status='verified'").run(req.user.institution_id,guardianId,studentId);
+  if(!changed.changes) return res.status(404).json({error:"Verified guardian relationship not found."});
+  log(req.user.id,"Revoked guardian relationship",JSON.stringify({student_id:studentId,guardian_id:guardianId}),req.user.institution_id);
+  res.json({ok:true});
 });
 
 app.get("/api/dashboard",auth,(req,res)=>{
