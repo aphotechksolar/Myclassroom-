@@ -99,12 +99,29 @@ function createAssessmentsRepository(database) {
         [assessment.id, id]
       );
       if (existing && existing.submitted_at) {
-        const error = new Error("Assessment already submitted");
+        const timedOut = Date.parse(existing.submitted_at) >= Date.parse(existing.expires_at);
+        const error = new Error(timedOut ? "Assessment time has expired" : "Assessment already submitted");
         error.status = 400;
-        error.attempt = existing;
+        error.attempt = { ...existing, timed_out: timedOut };
         throw error;
       }
       let attempt = existing;
+      if (attempt && (!attempt.expires_at || !Number.isFinite(Date.parse(attempt.expires_at)))) {
+        const error = new Error("This attempt has no valid deadline. Contact your school administrator.");
+        error.status = 400;
+        throw error;
+      }
+      if (attempt && Date.parse(attempt.expires_at) <= Date.now()) {
+        await tx.execute(
+          "UPDATE attempts SET submitted_at = expires_at, score = 0, percentage = 0, status = 'FAIL', answers_json = '{}' WHERE id = $1 AND student_id = $2 AND submitted_at IS NULL",
+          [attempt.id, id]
+        );
+        const expired = await tx.one("SELECT * FROM attempts WHERE id = $1 AND student_id = $2", [attempt.id, id]);
+        const error = new Error("Assessment time has expired");
+        error.status = 400;
+        error.attempt = { ...expired, timed_out: true };
+        throw error;
+      }
       if (!attempt) {
         const duration = Number(assessment.duration_minutes || 20);
         const expiresAt = new Date(Date.now() + duration * 60000).toISOString();
@@ -150,7 +167,27 @@ function createAssessmentsRepository(database) {
         error.status = 400;
         throw error;
       }
-      if (attempt.submitted_at) return attempt;
+      if (attempt.submitted_at) {
+        return {
+          ...attempt,
+          timed_out: Number.isFinite(Date.parse(attempt.expires_at)) &&
+            Date.parse(attempt.submitted_at) >= Date.parse(attempt.expires_at)
+        };
+      }
+      const deadline = Date.parse(attempt.expires_at);
+      if (!Number.isFinite(deadline)) {
+        const error = new Error("This attempt has no valid deadline. Contact your school administrator.");
+        error.status = 400;
+        throw error;
+      }
+      if (Date.now() >= deadline) {
+        await tx.execute(
+          "UPDATE attempts SET submitted_at = expires_at, score = 0, percentage = 0, status = 'FAIL', answers_json = '{}' WHERE id = $1 AND student_id = $2 AND submitted_at IS NULL",
+          [attempt.id, id]
+        );
+        const expired = await tx.one("SELECT * FROM attempts WHERE id = $1 AND student_id = $2", [attempt.id, id]);
+        return { ...expired, timed_out: true };
+      }
       let questions;
       try { questions = JSON.parse(assessment.questions_json); }
       catch { throw new Error("Assessment questions are unavailable"); }
@@ -169,9 +206,19 @@ function createAssessmentsRepository(database) {
     });
   }
 
+  async function expireOverdueAttempts() {
+    const now = new Date().toISOString();
+    const result = await database.execute(
+      "UPDATE attempts SET submitted_at = expires_at, score = 0, percentage = 0, status = 'FAIL', answers_json = '{}' WHERE submitted_at IS NULL AND expires_at IS NOT NULL AND expires_at <= $1",
+      [now]
+    );
+    return result.rowCount;
+  }
+
   return Object.freeze({
     async startAttempt(input) { return startAttempt(input); },
     async submitAttempt(input) { return submitAttempt(input); },
+    async expireOverdueAttempts() { return expireOverdueAttempts(); },
     async createForClass(input) { return createForClass(input); },
 
     async listForUser(userId, institutionId, role) {
