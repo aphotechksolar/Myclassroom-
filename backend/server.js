@@ -270,22 +270,28 @@ app.patch("/api/me",auth,(req,res)=>{
 });
 
 app.get("/api/admin/stats",auth,roles("admin"),(req,res)=>{
-  const q=t=>db.prepare(`SELECT COUNT(*) c FROM ${t}`).get().c;
-  res.json({users:q("users"),students:db.prepare("SELECT COUNT(*) c FROM users WHERE role='student'").get().c,teachers:db.prepare("SELECT COUNT(*) c FROM users WHERE role='teacher'").get().c,classes:q("classes"),materials:q("materials"),assignments:q("assignments"),assessments:q("assessments")});
+  const id=req.user.institution_id;
+  const users=db.prepare("SELECT COUNT(*) c FROM institution_memberships WHERE institution_id=? AND status='active'").get(id).c;
+  const count=table=>db.prepare(`SELECT COUNT(*) c FROM ${table} x JOIN classes c ON c.id=x.class_id WHERE c.institution_id=?`).get(id).c;
+  res.json({users,students:db.prepare("SELECT COUNT(*) c FROM institution_memberships WHERE institution_id=? AND role='student' AND status='active'").get(id).c,teachers:db.prepare("SELECT COUNT(*) c FROM institution_memberships WHERE institution_id=? AND role='teacher' AND status='active'").get(id).c,classes:db.prepare("SELECT COUNT(*) c FROM classes WHERE institution_id=?").get(id).c,materials:count("materials"),assignments:count("assignments"),assessments:count("assessments")});
 });
-app.get("/api/admin/users",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT id,name,email,role,phone,bio,created_at FROM users ORDER BY role,name").all()));
+app.get("/api/admin/users",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT u.id,u.name,u.email,u.role,m.role institution_role,u.phone,u.bio,u.created_at FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE m.institution_id=? AND m.status='active' ORDER BY m.role,u.name").all(req.user.institution_id)));
 app.patch("/api/admin/users/:id",auth,roles("admin"),(req,res)=>{
   const role=["admin","teacher","student"].includes(req.body.role)?req.body.role:null;
-  const u=db.prepare("SELECT * FROM users WHERE id=?").get(req.params.id);
-  if(!u) return res.status(404).json({error:"User not found"});
+  const u=db.prepare("SELECT u.* FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE u.id=? AND m.institution_id=? AND m.status='active'").get(req.params.id,req.user.institution_id);
+  if(!u) return res.status(404).json({error:"User not found in this school"});
   db.prepare("UPDATE users SET name=?,role=?,phone=?,bio=? WHERE id=?").run(req.body.name??u.name,role||u.role,req.body.phone??u.phone,req.body.bio??u.bio,u.id);
+  if(role) db.prepare("UPDATE institution_memberships SET role=? WHERE institution_id=? AND user_id=?").run(role==="admin"?"school_admin":role,req.user.institution_id,u.id);
   log(req.user.id,"Updated user",String(u.id)); res.json({ok:true});
 });
 app.delete("/api/admin/users/:id",auth,roles("admin"),(req,res)=>{
   if(Number(req.params.id)===req.user.id) return res.status(400).json({error:"You cannot delete yourself"});
-  db.prepare("DELETE FROM users WHERE id=?").run(req.params.id); log(req.user.id,"Deleted user",String(req.params.id)); res.json({ok:true});
+  const target=db.prepare("SELECT user_id FROM institution_memberships WHERE institution_id=? AND user_id=?").get(req.user.institution_id,req.params.id);
+  if(!target) return res.status(404).json({error:"User not found in this school"});
+  db.prepare("DELETE FROM institution_memberships WHERE institution_id=? AND user_id=?").run(req.user.institution_id,req.params.id);
+  log(req.user.id,"Removed school membership",String(req.params.id)); res.json({ok:true});
 });
-app.get("/api/audit",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT a.*,u.name actor_name FROM audit_log a LEFT JOIN users u ON u.id=a.actor_id ORDER BY a.id DESC LIMIT 100").all()));
+app.get("/api/audit",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT a.*,u.name actor_name FROM audit_log a LEFT JOIN users u ON u.id=a.actor_id WHERE a.institution_id=? ORDER BY a.id DESC LIMIT 100").all(req.user.institution_id)));
 
 app.get("/api/classes",auth,(req,res)=>{
   let rows;
@@ -389,8 +395,8 @@ app.get("/api/announcements",auth,(req,res)=>{const rows=req.user.role==="studen
 app.get("/api/notifications",auth,(req,res)=>res.json(db.prepare("SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 100").all(req.user.id)));
 app.patch("/api/notifications/:id/read",auth,(req,res)=>{db.prepare("UPDATE notifications SET read_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(req.params.id,req.user.id);res.json({ok:true});});
 
-app.get("/api/messages",auth,(req,res)=>res.json(db.prepare(`SELECT m.*,s.name sender_name,r.name receiver_name FROM messages m JOIN users s ON s.id=m.sender_id JOIN users r ON r.id=m.receiver_id WHERE m.sender_id=? OR m.receiver_id=? ORDER BY m.id DESC`).all(req.user.id,req.user.id)));
-app.post("/api/messages",auth,(req,res)=>{const receiver=db.prepare("SELECT id FROM users WHERE id=?").get(req.body.receiver_id);if(!receiver)return res.status(404).json({error:"Recipient not found"});const r=db.prepare("INSERT INTO messages(sender_id,receiver_id,subject,body) VALUES(?,?,?,?)").run(req.user.id,receiver.id,req.body.subject||"",req.body.body||"");notify(receiver.id,"New message","You have a new message from "+req.user.name);res.json({id:r.lastInsertRowid});});
+app.get("/api/messages",auth,(req,res)=>res.json(db.prepare(`SELECT m.*,s.name sender_name,r.name receiver_name FROM messages m JOIN users s ON s.id=m.sender_id JOIN users r ON r.id=m.receiver_id JOIN institution_memberships sm ON sm.user_id=m.sender_id AND sm.institution_id=? AND sm.status='active' JOIN institution_memberships rm ON rm.user_id=m.receiver_id AND rm.institution_id=? AND rm.status='active' WHERE m.sender_id=? OR m.receiver_id=? ORDER BY m.id DESC`).all(req.user.institution_id,req.user.institution_id,req.user.id,req.user.id)));
+app.post("/api/messages",auth,(req,res)=>{const receiver=db.prepare("SELECT u.id FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE u.id=? AND m.institution_id=? AND m.status='active'").get(req.body.receiver_id,req.user.institution_id);if(!receiver)return res.status(404).json({error:"Recipient not found in this school"});const r=db.prepare("INSERT INTO messages(sender_id,receiver_id,subject,body) VALUES(?,?,?,?)").run(req.user.id,receiver.id,req.body.subject||"",req.body.body||"");notify(receiver.id,"New message","You have a new message from "+req.user.name);res.json({id:r.lastInsertRowid});});
 app.patch("/api/messages/:id/read",auth,(req,res)=>{db.prepare("UPDATE messages SET read_at=CURRENT_TIMESTAMP WHERE id=? AND receiver_id=?").run(req.params.id,req.user.id);res.json({ok:true});});
 
 app.get("/api/report-card/:studentId",auth,(req,res)=>{
@@ -400,11 +406,11 @@ app.get("/api/report-card/:studentId",auth,(req,res)=>{
   const student=db.prepare("SELECT id,name,email FROM users WHERE id=?").get(sid);
   const subjects=db.prepare(`SELECT s.name subject,ROUND(COALESCE(AVG(at.percentage),0),1) average FROM subjects s LEFT JOIN assessments a ON a.class_id=s.class_id LEFT JOIN attempts at ON at.assessment_id=a.id AND at.student_id=? AND at.status='submitted' WHERE s.class_id IN (SELECT class_id FROM enrollments WHERE student_id=?) GROUP BY s.id`).all(sid,sid);
   const att=db.prepare("SELECT COUNT(*) total,SUM(status='present') present,SUM(status='absent') absent,SUM(status='late') late FROM attendance WHERE student_id=?").get(sid);
-  const school=db.prepare("SELECT value FROM school_settings WHERE key='school_name'").get()?.value||"MyClassroom Academy";
+  const school=db.prepare("SELECT value FROM school_settings WHERE key='school_name' AND institution_id=?").get(req.user.institution_id)?.value||req.user.institution_name||"MyClassroom Academy";
   res.json({school,student,subjects,attendance:att});
 });
-app.get("/api/settings",auth,(req,res)=>res.json(Object.fromEntries(db.prepare("SELECT key,value FROM school_settings").all().map(x=>[x.key,x.value]))));
-app.patch("/api/settings",auth,roles("admin"),(req,res)=>{for(const [k,v] of Object.entries(req.body)){db.prepare("INSERT INTO school_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(k,String(v));}log(req.user.id,"Updated school settings");res.json({ok:true});});
+app.get("/api/settings",auth,(req,res)=>res.json(Object.fromEntries(db.prepare("SELECT key,value FROM school_settings WHERE institution_id=?").all(req.user.institution_id).map(x=>[x.key,x.value]))));
+app.patch("/api/settings",auth,roles("admin"),(req,res)=>{for(const [k,v] of Object.entries(req.body)){db.prepare("INSERT INTO school_settings(key,value,institution_id) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(k,String(v),req.user.institution_id);}log(req.user.id,"Updated school settings");res.json({ok:true});});
 
 app.get("/api/dashboard",auth,(req,res)=>{
   if(req.user.role==="admin")return res.json({role:"admin",stats:{users:db.prepare("SELECT COUNT(*) c FROM users").get().c,students:db.prepare("SELECT COUNT(*) c FROM users WHERE role='student'").get().c,teachers:db.prepare("SELECT COUNT(*) c FROM users WHERE role='teacher'").get().c,classes:db.prepare("SELECT COUNT(*) c FROM classes").get().c}});
