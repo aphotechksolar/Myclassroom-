@@ -1,23 +1,32 @@
 /**
- * Institution-scoped messaging inbox reads.
+ * Institution-scoped messaging operations.
  *
- * A user can see only messages where they are a sender or receiver, and
- * both participants must still have active membership in the same school.
+ * Inbox reads require the user and both participants to have active
+ * membership in the same school. Read receipts can only be set by receiver.
  */
 function createMessagesRepository(database) {
-  if (!database || typeof database.many !== "function") {
+  if (!database || typeof database.many !== "function" || typeof database.execute !== "function") {
     throw new TypeError("Messages repository requires an async database");
+  }
+
+  function assertUserId(userId) {
+    if (!Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) {
+      throw new TypeError("A valid user ID is required");
+    }
+    return Number(userId);
+  }
+
+  function assertInstitutionId(institutionId) {
+    if (typeof institutionId !== "string" || !institutionId.trim()) {
+      throw new TypeError("A valid institution ID is required");
+    }
+    return institutionId;
   }
 
   return Object.freeze({
     async listForUser(userId, institutionId) {
-      if (!Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) {
-        throw new TypeError("A valid user ID is required");
-      }
-      if (typeof institutionId !== "string" || !institutionId.trim()) {
-        throw new TypeError("A valid institution ID is required");
-      }
-
+      const id = assertUserId(userId);
+      const institution = assertInstitutionId(institutionId);
       return database.many(
         `SELECT m.*, s.name sender_name, r.name receiver_name
          FROM messages m
@@ -34,7 +43,17 @@ function createMessagesRepository(database) {
          WHERE m.institution_id = $1
            AND (m.sender_id = $2 OR m.receiver_id = $2)
          ORDER BY m.id DESC`,
-        [institutionId, Number(userId)]
+        [institution, id]
+      );
+    },
+
+    async markRead(messageId, receiverId, institutionId) {
+      const id = assertUserId(messageId);
+      const receiver = assertUserId(receiverId);
+      const institution = assertInstitutionId(institutionId);
+      return database.execute(
+        "UPDATE messages SET read_at = CURRENT_TIMESTAMP WHERE id = $1 AND receiver_id = $2 AND institution_id = $3",
+        [id, receiver, institution]
       );
     }
   });
