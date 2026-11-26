@@ -18,6 +18,12 @@ function setup() {
       class_id INTEGER, teacher_id INTEGER, pass_mark REAL, questions_json TEXT,
       created_at TEXT
     );
+    CREATE TABLE attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, assessment_id INTEGER, student_id INTEGER,
+      started_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT, submitted_at TEXT,
+      score REAL DEFAULT 0, percentage REAL DEFAULT 0, status TEXT DEFAULT 'in_progress',
+      answers_json TEXT DEFAULT '{}', UNIQUE(assessment_id, student_id)
+    );
     INSERT INTO users VALUES (1, 'Teacher One'), (2, 'Teacher Two');
     INSERT INTO classes VALUES
       (10, 'A Biology', 1, 'school-a'),
@@ -25,7 +31,7 @@ function setup() {
       (12, 'B Biology', 1, 'school-b');
     INSERT INTO enrollments VALUES (1, 10, 101), (2, 11, 102), (3, 12, 101);
     INSERT INTO assessments VALUES
-      (20, 'A Biology Quiz', 'quiz', 20, 10, 1, 50, '[{"question":"Q1"},{"question":"Q2"}]', '2026-01-01'),
+      (20, 'A Biology Quiz', 'quiz', 20, 10, 1, 50, '[{"question":"Q1","options":["Correct","Wrong"],"answer":0},{"question":"Q2","options":["Correct","Wrong"],"answer":0}]', '2026-01-01'),
       (21, 'A Chemistry Exam', 'exam', 60, 11, 2, 40, '[{"question":"Q1"}]', '2026-01-02'),
       (22, 'B Biology Quiz', 'quiz', 20, 12, 1, 50, '[]', '2026-01-03');
   `);
@@ -143,4 +149,62 @@ test("assessment creation rejects invalid questions, class IDs and roles", async
   } finally {
     await database.close();
   }
+});
+
+
+test("student assessment listings never expose answer keys", async () => {
+  const { database, repository } = setup();
+  try {
+    const rows = await repository.listForUser(101, "school-a", "student");
+    assert.equal(rows.length, 1);
+    assert.equal(Object.hasOwn(rows[0], "questions_json"), false);
+    assert.equal(rows[0].question_count, 2);
+  } finally { await database.close(); }
+});
+
+test("students can start an enrolled assessment and receive questions without answers", async () => {
+  const { database, repository } = setup();
+  try {
+    const started = await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    assert.ok(started.attempt.id > 0);
+    assert.equal(started.attempt.status, "in_progress");
+    assert.equal(started.questions.length, 2);
+    assert.equal(Object.hasOwn(started.questions[0], "answer"), false);
+    const again = await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    assert.equal(again.attempt.id, started.attempt.id);
+  } finally { await database.close(); }
+});
+
+test("assessment start denies students outside the institution or class roster", async () => {
+  const { database, repository } = setup();
+  try {
+    await assert.rejects(repository.startAttempt({ userId: 102, institutionId: "school-a", assessmentId: 20 }), error => error.status === 403);
+    await assert.rejects(repository.startAttempt({ userId: 101, institutionId: "school-b", assessmentId: 20 }), error => error.status === 403);
+  } finally { await database.close(); }
+});
+
+test("submissions are graded once and duplicate submissions return the saved result", async () => {
+  const { database, repository } = setup();
+  try {
+    const started = await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    const result = await repository.submitAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20, answers: { 0: 0, 1: 1 } });
+    assert.equal(result.id, started.attempt.id);
+    assert.equal(result.score, 1);
+    assert.equal(result.percentage, 50);
+    assert.equal(result.status, "PASS");
+    const duplicate = await repository.submitAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20, answers: { 0: 1, 1: 1 } });
+    assert.equal(duplicate.score, 1);
+    assert.equal(duplicate.answers_json, result.answers_json);
+    await assert.rejects(repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 }), error => error.status === 400);
+  } finally { await database.close(); }
+});
+
+test("submission rejects missing attempts, invalid answer payloads and cross-school access", async () => {
+  const { database, repository } = setup();
+  try {
+    await assert.rejects(repository.submitAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20, answers: {} }), error => error.status === 400);
+    await assert.rejects(repository.submitAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20, answers: [] }), /Answers must be an object/);
+    await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    await assert.rejects(repository.submitAttempt({ userId: 101, institutionId: "school-b", assessmentId: 20, answers: {} }), error => error.status === 400);
+  } finally { await database.close(); }
 });

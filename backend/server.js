@@ -560,23 +560,26 @@ app.patch("/api/submissions/:id/grade",auth,roles("admin","teacher"),async(req,r
 
 app.post("/api/assessments",auth,roles("admin","teacher"),async(req,res,next)=>{try{const created=await assessmentsRepository.createForClass({userId:req.user.id,institutionId:req.user.institution_id,role:req.user.institution_role,classId:req.body.class_id,title:req.body.title,type:req.body.type,durationMinutes:req.body.duration_minutes,passMark:req.body.pass_mark,questions:req.body.questions});created.studentIds.forEach(studentId=>notify(studentId,"New assessment",req.body.title,req.user.institution_id));res.json({id:created.id});}catch(error){if(error.status===403)return res.status(403).json({error:error.message});if(error instanceof TypeError)return res.status(400).json({error:error.message});next(error);}});
 app.get("/api/assessments",auth,async(req,res,next)=>{try{const rows=await assessmentsRepository.listForUser(req.user.id,req.user.institution_id,req.user.institution_role);res.json(rows);}catch(error){next(error);}});
-app.post("/api/assessments/:id/start",auth,roles("student"),(req,res)=>{
-  const a=db.prepare("SELECT * FROM assessments WHERE id=?").get(req.params.id);if(!a||!classForUser(req.user,a.class_id)||!db.prepare("SELECT 1 FROM enrollments WHERE class_id=? AND student_id=?").get(a.class_id,req.user.id))return res.status(403).json({error:"Not allowed"});
-  const existing=db.prepare("SELECT * FROM attempts WHERE assessment_id=? AND student_id=?").get(a.id,req.user.id);
-  if(existing&&existing.status==="submitted")return res.status(400).json({error:"Assessment already submitted",attempt:existing});
-  if(existing)return res.json({attempt:existing,questions:JSON.parse(a.questions_json).map(q=>({question:q.question,options:q.options}))});
-  const expires=new Date(Date.now()+Number(a.duration_minutes||20)*60000).toISOString();
-  const r=db.prepare("INSERT INTO attempts(assessment_id,student_id,expires_at) VALUES(?,?,?)").run(a.id,req.user.id,expires);
-  res.json({attempt:db.prepare("SELECT * FROM attempts WHERE id=?").get(r.lastInsertRowid),questions:JSON.parse(a.questions_json).map(q=>({question:q.question,options:q.options}))});
+app.post("/api/assessments/:id/start",auth,roles("student"),async(req,res,next)=>{
+  try{
+    const result=await assessmentsRepository.startAttempt({userId:req.user.id,institutionId:req.user.institution_id,assessmentId:req.params.id});
+    res.json(result);
+  }catch(error){
+    if(error.status===400)return res.status(400).json({error:error.message,attempt:error.attempt});
+    if(error.status===403)return res.status(403).json({error:error.message});
+    if(error instanceof TypeError)return res.status(400).json({error:error.message});
+    next(error);
+  }
 });
-app.post("/api/assessments/:id/submit",auth,roles("student"),(req,res)=>{
-  const a=db.prepare("SELECT * FROM assessments WHERE id=?").get(req.params.id), at=db.prepare("SELECT * FROM attempts WHERE assessment_id=? AND student_id=?").get(req.params.id,req.user.id);
-  if(!a||!at||!classForUser(req.user,a.class_id))return res.status(400).json({error:"Attempt not found"}); if(at.status==="submitted")return res.json(at);
-  const questions=JSON.parse(a.questions_json), answers=req.body.answers||{}, expired=new Date(at.expires_at).getTime()<Date.now();
-  let score=0;questions.forEach((q,i)=>{if(Number(answers[i])===Number(q.answer))score++;});
-  const pct=questions.length?Math.round(score/questions.length*100):0, status=pct>=a.pass_mark?"PASS":"FAIL";
-  db.prepare("UPDATE attempts SET submitted_at=CURRENT_TIMESTAMP,score=?,percentage=?,status=?,answers_json=? WHERE id=?").run(score,pct,status,JSON.stringify(answers),at.id);
-  res.json(db.prepare("SELECT * FROM attempts WHERE id=?").get(at.id));
+app.post("/api/assessments/:id/submit",auth,roles("student"),async(req,res,next)=>{
+  try{
+    const result=await assessmentsRepository.submitAttempt({userId:req.user.id,institutionId:req.user.institution_id,assessmentId:req.params.id,answers:req.body.answers||{}});
+    res.json(result);
+  }catch(error){
+    if(error.status===400)return res.status(400).json({error:error.message});
+    if(error instanceof TypeError)return res.status(400).json({error:error.message});
+    next(error);
+  }
 });
 app.get("/api/results",auth,(req,res)=>{let sql=`SELECT at.*,a.title,a.type,a.pass_mark,c.name class_name,u.name student_name FROM attempts at JOIN assessments a ON a.id=at.assessment_id JOIN classes c ON c.id=a.class_id JOIN users u ON u.id=at.student_id`;let rows=req.user.institution_role==="student"?db.prepare(sql+" WHERE c.institution_id=? AND at.student_id=? ORDER BY at.id DESC").all(req.user.institution_id,req.user.id):req.user.institution_role==="teacher"?db.prepare(sql+" WHERE c.institution_id=? AND (a.teacher_id=? OR c.teacher_id=?) ORDER BY at.id DESC").all(req.user.institution_id,req.user.id,req.user.id):db.prepare(sql+" WHERE c.institution_id=? ORDER BY at.id DESC").all(req.user.institution_id);res.json(rows);});
 app.get("/api/gradebook",auth,roles("admin","teacher"),(req,res)=>{let sql=`SELECT u.id student_id,u.name student_name,c.id class_id,c.name class_name,
