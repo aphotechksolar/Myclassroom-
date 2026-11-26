@@ -472,9 +472,25 @@ app.get("/api/settings",auth,(req,res)=>res.json(Object.fromEntries(db.prepare("
 app.patch("/api/settings",auth,roles("admin"),(req,res)=>{for(const [k,v] of Object.entries(req.body)){db.prepare("INSERT INTO institution_settings(institution_id,key,value,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(institution_id,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").run(req.user.institution_id,k,String(v));}log(req.user.id,"Updated school settings");res.json({ok:true});});
 
 app.get("/api/dashboard",auth,(req,res)=>{
-  if(req.user.role==="admin")return res.json({role:"admin",stats:{users:db.prepare("SELECT COUNT(*) c FROM users").get().c,students:db.prepare("SELECT COUNT(*) c FROM users WHERE role='student'").get().c,teachers:db.prepare("SELECT COUNT(*) c FROM users WHERE role='teacher'").get().c,classes:db.prepare("SELECT COUNT(*) c FROM classes").get().c}});
-  if(req.user.role==="teacher")return res.json({role:"teacher",stats:{classes:db.prepare("SELECT COUNT(*) c FROM classes WHERE teacher_id=?").get(req.user.id).c,students:db.prepare("SELECT COUNT(DISTINCT e.student_id) c FROM enrollments e JOIN classes c ON c.id=e.class_id WHERE c.teacher_id=?").get(req.user.id).c,pending:db.prepare("SELECT COUNT(*) c FROM submissions s JOIN assignments a ON a.id=s.assignment_id WHERE (a.teacher_id=? OR a.class_id IN (SELECT id FROM classes WHERE teacher_id=?)) AND s.score IS NULL").get(req.user.id,req.user.id).c,assessments:db.prepare("SELECT COUNT(*) c FROM assessments WHERE teacher_id=?").get(req.user.id).c}});
-  return res.json({role:"student",stats:{classes:db.prepare("SELECT COUNT(*) c FROM enrollments WHERE student_id=?").get(req.user.id).c,assignments:db.prepare("SELECT COUNT(*) c FROM assignments a JOIN enrollments e ON e.class_id=a.class_id WHERE e.student_id=?").get(req.user.id).c,assessments:db.prepare("SELECT COUNT(*) c FROM assessments a JOIN enrollments e ON e.class_id=a.class_id WHERE e.student_id=?").get(req.user.id).c,average:db.prepare("SELECT ROUND(COALESCE(AVG(percentage),0),1) c FROM attempts WHERE student_id=? AND status='submitted'").get(req.user.id).c}});
+  const institutionId=req.user.institution_id;
+  if(req.user.institution_role==="school_admin")return res.json({role:"admin",stats:{
+    users:db.prepare("SELECT COUNT(*) c FROM institution_memberships WHERE institution_id=? AND status='active'").get(institutionId).c,
+    students:db.prepare("SELECT COUNT(*) c FROM institution_memberships WHERE institution_id=? AND role='student' AND status='active'").get(institutionId).c,
+    teachers:db.prepare("SELECT COUNT(*) c FROM institution_memberships WHERE institution_id=? AND role='teacher' AND status='active'").get(institutionId).c,
+    classes:db.prepare("SELECT COUNT(*) c FROM classes WHERE institution_id=?").get(institutionId).c
+  }});
+  if(req.user.institution_role==="teacher")return res.json({role:"teacher",stats:{
+    classes:db.prepare("SELECT COUNT(*) c FROM classes WHERE institution_id=? AND teacher_id=?").get(institutionId,req.user.id).c,
+    students:db.prepare("SELECT COUNT(DISTINCT e.student_id) c FROM enrollments e JOIN classes c ON c.id=e.class_id WHERE c.institution_id=? AND c.teacher_id=?").get(institutionId,req.user.id).c,
+    pending:db.prepare("SELECT COUNT(*) c FROM submissions s JOIN assignments a ON a.id=s.assignment_id JOIN classes c ON c.id=a.class_id WHERE c.institution_id=? AND (a.teacher_id=? OR c.teacher_id=?) AND s.score IS NULL").get(institutionId,req.user.id,req.user.id).c,
+    assessments:db.prepare("SELECT COUNT(*) c FROM assessments a JOIN classes c ON c.id=a.class_id WHERE c.institution_id=? AND a.teacher_id=?").get(institutionId,req.user.id).c
+  }});
+  return res.json({role:"student",stats:{
+    classes:db.prepare("SELECT COUNT(*) c FROM enrollments e JOIN classes c ON c.id=e.class_id WHERE c.institution_id=? AND e.student_id=?").get(institutionId,req.user.id).c,
+    assignments:db.prepare("SELECT COUNT(*) c FROM assignments a JOIN enrollments e ON e.class_id=a.class_id JOIN classes c ON c.id=a.class_id WHERE c.institution_id=? AND e.student_id=?").get(institutionId,req.user.id).c,
+    assessments:db.prepare("SELECT COUNT(*) c FROM assessments a JOIN enrollments e ON e.class_id=a.class_id JOIN classes c ON c.id=a.class_id WHERE c.institution_id=? AND e.student_id=?").get(institutionId,req.user.id).c,
+    average:db.prepare("SELECT ROUND(COALESCE(AVG(at.percentage),0),1) c FROM attempts at JOIN assessments a ON a.id=at.assessment_id JOIN classes c ON c.id=a.class_id WHERE c.institution_id=? AND at.student_id=? AND at.status='submitted'").get(institutionId,req.user.id).c
+  }});
 });
 
 app.get("/api/health",(req,res)=>res.json({ok:true,version:"12.0.0"}));
