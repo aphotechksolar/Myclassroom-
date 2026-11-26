@@ -67,7 +67,20 @@ async function login(email) {
     body: { email, password: "TestSchoolAdmin!2026" }
   });
   assert.equal(result.status, 200, JSON.stringify(result.body));
-  return result.body;
+  assert.equal(result.body.must_change_password, true, "new school administrators must change their initial password");
+  const blocked = await request("/api/dashboard", { token: result.body.token });
+  assert.equal(blocked.status, 403, "temporary-password accounts cannot access protected APIs");
+  assert.equal(blocked.body.mustChangePassword, true);
+  const changed = await request("/api/auth/change-password", {
+    method: "POST",
+    token: result.body.token,
+    body: { currentPassword: "TestSchoolAdmin!2026", newPassword: "NewSchoolAdminPassword!2026" }
+  });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  const ready = { ...result.body, token: changed.body.token };
+  const dashboard = await request("/api/dashboard", { token: ready.token });
+  assert.equal(dashboard.status, 200, "normal API access resumes after password change");
+  return ready;
 }
 
 before(async () => {
@@ -167,6 +180,21 @@ test("platform onboarding, login, tenant isolation and suspension are enforced",
   });
   assert.equal(studentA.status, 201, JSON.stringify(studentA.body));
   assert.equal(studentA.body.institution_role, "student");
+  const studentLogin = await request("/api/auth/login", {
+    method: "POST",
+    body: { email: "northfield.student@example.test", password: "StudentPassword!2026" }
+  });
+  assert.equal(studentLogin.status, 200);
+  assert.equal(studentLogin.body.must_change_password, true);
+  const studentBlocked = await request("/api/classes", { token: studentLogin.body.token });
+  assert.equal(studentBlocked.status, 403, "school-created student accounts cannot bypass the forced password screen");
+  const studentPasswordChanged = await request("/api/auth/change-password", {
+    method: "POST", token: studentLogin.body.token,
+    body: { currentPassword: "StudentPassword!2026", newPassword: "StudentNewPassword!2026" }
+  });
+  assert.equal(studentPasswordChanged.status, 200);
+  const studentAccessRestored = await request("/api/dashboard", { token: studentPasswordChanged.body.token });
+  assert.equal(studentAccessRestored.status, 200);
   const crossSchoolStudentInvite = await request("/api/guardians/invitations", {
     method: "POST", token: adminB.token,
     body: { student_id: studentA.body.id, email: "guardian.cross@example.test" }
