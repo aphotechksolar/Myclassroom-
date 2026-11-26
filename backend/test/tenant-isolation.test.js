@@ -152,6 +152,15 @@ test("platform onboarding, login, tenant isolation and suspension are enforced",
   assert.equal(classesB.status, 200);
   assert.deepEqual(classesB.body, [], "a different school's administrator must not see the first school's class");
 
+  const invalidGuardianInvite = await request("/api/guardians/invitations", {
+    method: "POST",
+    token: adminA.token,
+    body: { student_id: 999999, email: "guardian@example.test" }
+  });
+  assert.equal(invalidGuardianInvite.status, 404, "a school cannot invite a guardian for a student outside its membership");
+  const parentRouteDeniedForAdmin = await request("/api/guardian/children", { token: adminA.token });
+  assert.equal(parentRouteDeniedForAdmin.status, 403, "guardian data endpoints require a parent membership");
+
   const suspended = await request(`/api/platform/institutions/${schoolA.institution.id}/status`, {
     method: "PATCH",
     platform: true,
