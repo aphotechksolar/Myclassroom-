@@ -5,7 +5,7 @@ async function api(url,opts={}){
  opts={...opts,headers:{...(opts.headers||{})},credentials:"same-origin"};
  const method=String(opts.method||"GET").toUpperCase();
  if(!["GET","HEAD","OPTIONS"].includes(method) && !["/auth/login","/auth/register","/auth/guardian/redeem","/auth/request-reset","/auth/reset"].includes(url)){
-  if(!csrfToken){const csrfResponse=await fetch("/api/auth/csrf",{credentials:"same-origin",cache:"no-store"});let csrfData={};try{csrfData=await csrfResponse.json()}catch{}if(!csrfResponse.ok)throw new Error(csrfData.error||"Your session has expired. Please sign in again.");csrfToken=csrfData.csrfToken;}
+  if(!csrfToken){const csrfResponse=await fetch("/api/auth/csrf",{method:"POST",credentials:"same-origin",cache:"no-store"});let csrfData={};try{csrfData=await csrfResponse.json()}catch{}if(!csrfResponse.ok)throw new Error(csrfData.error||"Your session has expired. Please sign in again.");csrfToken=csrfData.csrfToken;}
   opts.headers["X-CSRF-Token"]=csrfToken;
  }
  if(!(opts.body instanceof FormData))opts.headers["Content-Type"]="application/json";
