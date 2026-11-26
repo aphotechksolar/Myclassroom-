@@ -137,6 +137,16 @@ CREATE TABLE IF NOT EXISTS audit_log(
 `);
 
 const count = db.prepare("SELECT COUNT(*) c FROM users").get().c;
+if (!count && process.env.NODE_ENV === "production") {
+  const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || "").trim().toLowerCase();
+  const password = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || "");
+  const name = String(process.env.BOOTSTRAP_ADMIN_NAME || "Platform Administrator").trim();
+  if (!email || password.length < 10 || password.length > 128) {
+    throw new Error("For a new production database, set BOOTSTRAP_ADMIN_EMAIL and a BOOTSTRAP_ADMIN_PASSWORD of 10-128 characters.");
+  }
+  db.prepare("INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,'admin')").run(name,email,bcrypt.hashSync(password,10));
+  db.prepare("INSERT INTO school_settings(key,value) VALUES('school_name',?)").run(process.env.SCHOOL_NAME || "MyClassroom Academy");
+}
 if (!count && process.env.NODE_ENV !== "production" && process.env.SEED_DEMO_DATA !== "false") {
   const ins = db.prepare("INSERT INTO users(name,email,password_hash,role,phone,bio) VALUES(?,?,?,?,?,?)");
   const admin = ins.run("School Administrator","admin@example.com",bcrypt.hashSync("admin123",10),"admin","","");
@@ -210,7 +220,7 @@ app.post("/api/auth/request-reset",(req,res)=>{
   db.prepare("INSERT INTO reset_tokens(user_id,token_hash,expires_at) VALUES(?,?,?)").run(u.id,hash,expires);
   // Email delivery is intentionally not simulated or exposed in the API response.
   // Connect a verified email provider before enabling customer-facing password recovery.
-  res.json({ok:true,message:"If the account exists, password reset instructions will be sent."});
+  res.json({ok:true,message:"Password recovery is not configured yet. Please contact your school administrator."});
 });
 app.post("/api/auth/reset",(req,res)=>{
   const crypto=require("crypto"), hash=crypto.createHash("sha256").update(req.body.token||"").digest("hex");
