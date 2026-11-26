@@ -15,6 +15,7 @@ const { createSubmissionRepository } = require("./repositories/submissions");
 const { createAssessmentsRepository } = require("./repositories/assessments");
 const { createTimetableRepository } = require("./repositories/timetable");
 const { createPeopleRepository } = require("./repositories/people");
+const { createAttendanceRepository } = require("./repositories/attendance");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const { validateMaterialUpload } = require("./uploads/validation");
@@ -97,6 +98,7 @@ const submissionRepository = createSubmissionRepository(asyncDb);
 const assessmentsRepository = createAssessmentsRepository(asyncDb);
 const timetableRepository = createTimetableRepository(asyncDb);
 const peopleRepository = createPeopleRepository(asyncDb);
+const attendanceRepository = createAttendanceRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -815,8 +817,21 @@ app.get("/api/export/gradebook.csv",auth,roles("admin","teacher"),(req,res)=>{
 });
 
 app.post("/api/attendance",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id);if(!c)return res.status(403).json({error:"Not allowed"});const student=db.prepare("SELECT 1 FROM institution_memberships WHERE institution_id=? AND user_id=? AND role='student' AND status='active'").get(req.user.institution_id,req.body.student_id);if(!student||!db.prepare("SELECT 1 FROM enrollments WHERE class_id=? AND student_id=?").get(c.id,req.body.student_id))return res.status(400).json({error:"Student is not enrolled in this class"});db.prepare("INSERT INTO attendance(class_id,student_id,date,status) VALUES(?,?,?,?) ON CONFLICT(class_id,student_id,date) DO UPDATE SET status=excluded.status").run(c.id,req.body.student_id,req.body.date,req.body.status||"present");res.json({ok:true});});
-app.get("/api/attendance/:classId",auth,(req,res)=>{if(!classForUser(req.user,req.params.classId))return res.status(403).json({error:"Not allowed"});const date=req.query.date||new Date().toISOString().slice(0,10);const rows=db.prepare(`SELECT u.id,u.name,u.email,COALESCE(att.status,'present') status FROM users u JOIN enrollments e ON e.student_id=u.id LEFT JOIN attendance att ON att.student_id=u.id AND att.class_id=e.class_id AND att.date=? WHERE e.class_id=? ORDER BY u.name`).all(date,req.params.classId);res.json({date,students:rows});});
-app.get("/api/attendance-summary/:classId",auth,(req,res)=>{if(!classForUser(req.user,req.params.classId))return res.status(403).json({error:"Not allowed"});res.json(db.prepare(`SELECT u.id,u.name,COUNT(att.id) total,SUM(CASE WHEN att.status='present' THEN 1 ELSE 0 END) present,SUM(CASE WHEN att.status='absent' THEN 1 ELSE 0 END) absent,SUM(CASE WHEN att.status='late' THEN 1 ELSE 0 END) late FROM users u JOIN enrollments e ON e.student_id=u.id LEFT JOIN attendance att ON att.student_id=u.id AND att.class_id=e.class_id WHERE e.class_id=? GROUP BY u.id ORDER BY u.name`).all(req.params.classId));});
+app.get("/api/attendance/:classId",auth,async(req,res,next)=>{
+  try {
+    const date=req.query.date||new Date().toISOString().slice(0,10);
+    const rows=await attendanceRepository.listForClass(req.user.id,req.user.institution_id,req.user.institution_role,req.params.classId,date);
+    if(rows===null) return res.status(403).json({error:"Not allowed"});
+    res.json({date,students:rows});
+  } catch(error) { next(error); }
+});
+app.get("/api/attendance-summary/:classId",auth,async(req,res,next)=>{
+  try {
+    const rows=await attendanceRepository.summarizeClass(req.user.id,req.user.institution_id,req.user.institution_role,req.params.classId);
+    if(rows===null) return res.status(403).json({error:"Not allowed"});
+    res.json(rows);
+  } catch(error) { next(error); }
+});
 
 app.post("/api/announcements",auth,roles("admin","teacher"),(req,res)=>{const c=req.body.class_id?classForUser(req.user,req.body.class_id):null;if(req.body.class_id&&!c)return res.status(403).json({error:"Not allowed"});const r=db.prepare("INSERT INTO announcements(title,body,class_id,author_id,institution_id) VALUES(?,?,?,?,?)").run(req.body.title,req.body.body,req.body.class_id||null,req.user.id,req.user.institution_id);const targets=req.body.class_id?db.prepare("SELECT e.student_id FROM enrollments e JOIN classes c ON c.id=e.class_id WHERE e.class_id=? AND c.institution_id=?").all(req.body.class_id,req.user.institution_id).map(x=>x.student_id):db.prepare("SELECT m.user_id id FROM institution_memberships m WHERE m.institution_id=? AND m.role='student' AND m.status='active'").all(req.user.institution_id).map(x=>x.id);targets.forEach(id=>notify(id,req.body.title,req.body.body,req.user.institution_id));res.json({id:r.lastInsertRowid});});
 app.get("/api/announcements",auth,async(req,res,next)=>{try{const rows=await announcementsRepository.listForUser(req.user.id,req.user.institution_id,req.user.institution_role==="student");res.json(rows);}catch(error){next(error);}});
