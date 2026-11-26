@@ -207,6 +207,7 @@ db.prepare(`
     CASE role WHEN 'admin' THEN 'school_admin' WHEN 'teacher' THEN 'teacher' ELSE 'student' END
   FROM users
 `).run();
+db.prepare("INSERT OR IGNORE INTO institution_settings(institution_id,key,value) SELECT 'legacy-school',key,value FROM school_settings").run();
 db.prepare("UPDATE classes SET institution_id='legacy-school' WHERE institution_id IS NULL").run();
 db.prepare("UPDATE announcements SET institution_id='legacy-school' WHERE institution_id IS NULL").run();
 db.prepare("UPDATE audit_log SET institution_id='legacy-school' WHERE institution_id IS NULL").run();
@@ -370,8 +371,10 @@ app.post("/api/classes",auth,roles("admin","teacher"),(req,res)=>{
 app.patch("/api/classes/:id",auth,roles("admin","teacher"),(req,res)=>{
   const c=db.prepare("SELECT * FROM classes WHERE id=? AND institution_id=?").get(req.params.id,req.user.institution_id); if(!c) return res.status(404).json({error:"Not found"});
   if(req.user.role==="teacher"&&c.teacher_id!==req.user.id) return res.status(403).json({error:"Not your class"});
-  db.prepare("UPDATE classes SET name=?,description=?,live_link=?,teacher_id=? WHERE id=?").run(req.body.name??c.name,req.body.description??c.description,req.body.live_link??c.live_link,req.user.role==="admin"?(req.body.teacher_id??c.teacher_id):c.teacher_id,c.id);
-  res.json(db.prepare("SELECT * FROM classes WHERE id=?").get(c.id));
+  const nextTeacher=req.user.institution_role==="school_admin"?(req.body.teacher_id??c.teacher_id):c.teacher_id;
+  if(nextTeacher && !db.prepare("SELECT 1 FROM institution_memberships WHERE institution_id=? AND user_id=? AND role='teacher' AND status='active'").get(req.user.institution_id,nextTeacher)) return res.status(400).json({error:"Teacher must belong to this school"});
+  db.prepare("UPDATE classes SET name=?,description=?,live_link=?,teacher_id=? WHERE id=? AND institution_id=?").run(req.body.name??c.name,req.body.description??c.description,req.body.live_link??c.live_link,nextTeacher,c.id,req.user.institution_id);
+  res.json(db.prepare("SELECT * FROM classes WHERE id=? AND institution_id=?").get(c.id,req.user.institution_id));
 });
 app.delete("/api/classes/:id",auth,roles("admin","teacher"),(req,res)=>{
   const c=db.prepare("SELECT * FROM classes WHERE id=? AND institution_id=?").get(req.params.id,req.user.institution_id); if(!c) return res.status(404).json({error:"Not found"});
@@ -395,7 +398,7 @@ app.get("/api/teachers",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELE
 
 app.post("/api/subjects",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id); if(!c)return res.status(403).json({error:"Not allowed"}); const r=db.prepare("INSERT INTO subjects(name,class_id,teacher_id) VALUES(?,?,?)").run(req.body.name,c.id,req.user.id); res.json(db.prepare("SELECT * FROM subjects WHERE id=?").get(r.lastInsertRowid));});
 app.get("/api/subjects",auth,(req,res)=>{const rows=req.user.institution_role==="student"?db.prepare("SELECT s.*,c.name class_name FROM subjects s LEFT JOIN classes c ON c.id=s.class_id JOIN enrollments e ON e.class_id=s.class_id WHERE c.institution_id=? AND e.student_id=?").all(req.user.institution_id,req.user.id):req.user.institution_role==="teacher"?db.prepare("SELECT s.*,c.name class_name FROM subjects s LEFT JOIN classes c ON c.id=s.class_id WHERE c.institution_id=? AND (s.teacher_id=? OR c.teacher_id=?)").all(req.user.institution_id,req.user.id,req.user.id):db.prepare("SELECT s.*,c.name class_name FROM subjects s LEFT JOIN classes c ON c.id=s.class_id WHERE c.institution_id=?").all(req.user.institution_id); res.json(rows);});
-app.post("/api/timetable",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id);if(!c)return res.status(403).json({error:"Not allowed"});const r=db.prepare("INSERT INTO timetable(class_id,subject_id,day,start_time,end_time,room) VALUES(?,?,?,?,?,?)").run(c.id,req.body.subject_id||null,req.body.day,req.body.start_time,req.body.end_time,req.body.room||"");res.json({id:r.lastInsertRowid});});
+app.post("/api/timetable",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id);if(!c)return res.status(403).json({error:"Not allowed"});const subjectId=req.body.subject_id||null;if(subjectId&&!db.prepare("SELECT 1 FROM subjects WHERE id=? AND class_id=?").get(subjectId,c.id))return res.status(400).json({error:"Subject must belong to this class"});const r=db.prepare("INSERT INTO timetable(class_id,subject_id,day,start_time,end_time,room) VALUES(?,?,?,?,?,?)").run(c.id,subjectId,req.body.day,req.body.start_time,req.body.end_time,req.body.room||"");res.json({id:r.lastInsertRowid});});
 app.get("/api/timetable",auth,(req,res)=>{let sql=`SELECT t.*,c.name class_name,s.name subject_name FROM timetable t LEFT JOIN classes c ON c.id=t.class_id LEFT JOIN subjects s ON s.id=t.subject_id`;let rows;if(req.user.institution_role==="student") rows=db.prepare(sql+" JOIN enrollments e ON e.class_id=t.class_id WHERE c.institution_id=? AND e.student_id=? ORDER BY CASE t.day WHEN 'Monday' THEN 1 WHEN 'Tuesday' THEN 2 WHEN 'Wednesday' THEN 3 WHEN 'Thursday' THEN 4 WHEN 'Friday' THEN 5 ELSE 6 END,t.start_time").all(req.user.institution_id,req.user.id);else if(req.user.institution_role==="teacher")rows=db.prepare(sql+" WHERE c.institution_id=? AND (c.teacher_id=? OR t.subject_id IN (SELECT id FROM subjects WHERE teacher_id=?)) ORDER BY t.day,t.start_time").all(req.user.institution_id,req.user.id,req.user.id);else rows=db.prepare(sql+" WHERE c.institution_id=? ORDER BY t.day,t.start_time").all(req.user.institution_id);res.json(rows);});
 
 const upload=multer({storage:multer.diskStorage({destination:UPLOADS,filename:(req,file,cb)=>cb(null,Date.now()+"-"+file.originalname.replace(/[^a-zA-Z0-9._-]/g,"_"))}),limits:{fileSize:10*1024*1024}});
