@@ -8,8 +8,12 @@ const Database = require("better-sqlite3");
  * while the application is migrated incrementally.
  */
 function openSqliteDatabase(filename) {
-  const resolved = path.resolve(filename);
-  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  // Keep SQLite's special in-memory filename intact. Resolving it as a path
+  // creates a shared on-disk file named ":memory:" and leaks state between tests.
+  const resolved = filename === ":memory:" ? filename : path.resolve(filename);
+  if (resolved !== ":memory:") {
+    fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  }
   const db = new Database(resolved);
   db.pragma("foreign_keys = ON");
   return db;
