@@ -69,7 +69,7 @@ function createSessionStore(db, options = {}) {
     const row = find.get(sessionHash, currentTime);
     if (!row) return null;
     touch.run(currentTime, sessionHash);
-    return { ...row, sessionHash };
+    return { ...row, last_seen_at: currentTime, sessionHash };
   }
 
   function verifyCsrf(session, suppliedToken) {
