@@ -629,7 +629,13 @@ app.get("/api/settings",auth,async(req,res,next)=>{
     res.json(Object.fromEntries(rows.map(({key,value})=>[key,value])));
   } catch (error) { next(error); }
 });
-app.patch("/api/settings",auth,roles("admin"),(req,res)=>{for(const [k,v] of Object.entries(req.body)){db.prepare("INSERT INTO institution_settings(institution_id,key,value,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(institution_id,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").run(req.user.institution_id,k,String(v));}log(req.user.id,"Updated school settings","",req.user.institution_id);res.json({ok:true});});
+app.patch("/api/settings",auth,roles("admin"),async(req,res,next)=>{
+  try {
+    await settingsRepository.updateForInstitution(req.user.institution_id, req.body);
+    log(req.user.id,"Updated school settings","",req.user.institution_id);
+    res.json({ok:true});
+  } catch (error) { next(error); }
+});
 
 app.get("/api/dashboard",auth,(req,res)=>{
   const institutionId=req.user.institution_id;
