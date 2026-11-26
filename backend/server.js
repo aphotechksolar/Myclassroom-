@@ -17,8 +17,8 @@ if (!SECRET) throw new Error("JWT_SECRET must be set to a strong random value in
 if (process.env.NODE_ENV === "production" && SECRET.length < 32) throw new Error("JWT_SECRET must be at least 32 characters in production.");
 const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, "..", "frontend");
-const DATA = path.join(ROOT, "data");
-const UPLOADS = path.join(ROOT, "uploads");
+const DATA = path.resolve(process.env.MYCLASSROOM_DATA_DIR || path.join(ROOT, "data"));
+const UPLOADS = path.resolve(process.env.MYCLASSROOM_UPLOADS_DIR || path.join(ROOT, "uploads"));
 fs.mkdirSync(DATA, {recursive:true});
 fs.mkdirSync(UPLOADS, {recursive:true});
 
