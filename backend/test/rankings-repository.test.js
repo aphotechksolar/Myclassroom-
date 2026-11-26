@@ -14,7 +14,7 @@ function setup(){
  CREATE TABLE attempts(id INTEGER PRIMARY KEY,assessment_id INTEGER,student_id INTEGER,percentage REAL,status TEXT);
  INSERT INTO users VALUES(1,'Teacher A','teacher'),(101,'A Student','student'),(102,'B Student','student'),(103,'Inactive Student','student');
  INSERT INTO classes VALUES(10,'A Biology',1,'school-a'),(11,'A Chemistry',1,'school-a'),(12,'B Biology',1,'school-b');
- INSERT INTO enrollments VALUES(1,10,101),(2,10,102),(3,10,103),(4,11,101),(5,12,101);
+ INSERT INTO enrollments VALUES(1,10,101),(2,10,102),(3,10,103),(5,12,101);
  INSERT INTO institution_memberships VALUES
   (1,1,'school-a','teacher','active'),
   (2,101,'school-a','student','active'),
