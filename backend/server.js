@@ -34,7 +34,7 @@ app.use(cors(corsOptions));
 app.use(express.json({limit:"2mb"}));
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: "Too many authentication attempts. Please try again later." } });
 app.use("/api/auth", authLimiter);
-app.use("/uploads", express.static(UPLOADS));
+// Uploaded learning files are served only through authenticated, institution-scoped routes.
 
 const db = new Database(path.join(DATA, "myclassroom.db"));
 db.pragma("foreign_keys = ON");
@@ -405,6 +405,15 @@ app.post("/api/materials",auth,roles("admin","teacher"),upload.single("file"),(r
   const r=db.prepare("INSERT INTO materials(title,description,url,file_url,class_id,teacher_id) VALUES(?,?,?,?,?,?)").run(req.body.title,req.body.description||"",req.body.url||"",file,c.id,req.user.id);
   const students=db.prepare("SELECT student_id FROM enrollments WHERE class_id=?").all(c.id);students.forEach(s=>notify(s.student_id,"New learning material",req.body.title));
   res.json(db.prepare("SELECT * FROM materials WHERE id=?").get(r.lastInsertRowid));
+});
+app.get("/api/materials/:id/file",auth,(req,res)=>{
+  const material=db.prepare("SELECT m.file_url,m.class_id FROM materials m WHERE m.id=?").get(req.params.id);
+  if(!material||!material.file_url) return res.status(404).json({error:"File not found"});
+  if(!classForUser(req.user,material.class_id)) return res.status(404).json({error:"File not found"});
+  const filename=path.basename(material.file_url);
+  const filePath=path.join(UPLOADS,filename);
+  if(!fs.existsSync(filePath)) return res.status(404).json({error:"File not found"});
+  res.sendFile(filePath);
 });
 app.get("/api/materials",auth,(req,res)=>{let sql="SELECT m.*,c.name class_name,u.name teacher_name FROM materials m LEFT JOIN classes c ON c.id=m.class_id LEFT JOIN users u ON u.id=m.teacher_id";let rows;if(req.user.institution_role==="student")rows=db.prepare(sql+" JOIN enrollments e ON e.class_id=m.class_id WHERE c.institution_id=? AND e.student_id=? ORDER BY m.id DESC").all(req.user.institution_id,req.user.id);else if(req.user.institution_role==="teacher")rows=db.prepare(sql+" WHERE c.institution_id=? AND (m.teacher_id=? OR c.teacher_id=?) ORDER BY m.id DESC").all(req.user.institution_id,req.user.id,req.user.id);else rows=db.prepare(sql+" WHERE c.institution_id=? ORDER BY m.id DESC").all(req.user.institution_id);res.json(rows);});
 
