@@ -305,7 +305,7 @@ function sign(user,institutionId){
   const membership=activeMembership(user.id,institutionId);
   if(!membership) throw new Error("User has no active institution membership");
   const effectiveRole=membership.role==="school_admin"?"admin":membership.role;
-  return jwt.sign({id:user.id,name:user.name,email:user.email,role:effectiveRole,institution_id:membership.institution_id,institution_role:membership.role},SECRET,{expiresIn:"7d"});
+  return jwt.sign({id:user.id,name:user.name,email:user.email,role:effectiveRole,institution_id:membership.institution_id,institution_role:membership.role},SECRET,{expiresIn:"8h"});
 }
 function log(actor,action,details="",institutionId=null){ const id=institutionId||activeMembership(actor)?.institution_id||null; db.prepare("INSERT INTO audit_log(actor_id,action,details,institution_id) VALUES(?,?,?,?)").run(actor,action,details,id); }
 function notify(userId,title,body,institutionId){ if(userId && institutionId) db.prepare("INSERT INTO notifications(user_id,title,body,institution_id) VALUES(?,?,?,?)").run(userId,title,body,institutionId); }

@@ -32,3 +32,11 @@ Audit every route for resource-level access control, not only role checks. Speci
 ## Release policy
 
 Do not onboard real institutions or real learner records until the release blockers are resolved, tenant isolation tests pass, data backups and restoration are verified, and the deployment architecture provides durable database and file storage.
+
+
+## Browser session handling (implemented)
+
+- Browser access tokens are held in `sessionStorage`, not `localStorage`. They remain available across page reloads in the same tab and are cleared when that tab/window session ends.
+- Logout removes only the MyClassroom session keys; it does not clear unrelated data for other applications on the same origin.
+- API access JWTs expire after eight hours. Users must sign in again after expiry.
+- `sessionStorage` reduces persistence on shared devices but is still accessible to JavaScript running on the page. It is not a substitute for a future HttpOnly-cookie session design and strong XSS prevention.
