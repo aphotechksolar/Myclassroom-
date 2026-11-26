@@ -15,6 +15,7 @@ const { createSubmissionRepository } = require("./repositories/submissions");
 const { createAssessmentsRepository } = require("./repositories/assessments");
 const { createStorage } = require("./storage");
 const multer = require("multer");
+const { validateMaterialUpload } = require("./uploads/validation");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 require("dotenv").config();
@@ -629,7 +630,7 @@ app.post("/api/timetable",auth,roles("admin","teacher"),(req,res)=>{const c=clas
 app.get("/api/timetable",auth,(req,res)=>{let sql=`SELECT t.*,c.name class_name,s.name subject_name FROM timetable t LEFT JOIN classes c ON c.id=t.class_id LEFT JOIN subjects s ON s.id=t.subject_id`;let rows;if(req.user.institution_role==="student") rows=db.prepare(sql+" JOIN enrollments e ON e.class_id=t.class_id WHERE c.institution_id=? AND e.student_id=? ORDER BY CASE t.day WHEN 'Monday' THEN 1 WHEN 'Tuesday' THEN 2 WHEN 'Wednesday' THEN 3 WHEN 'Thursday' THEN 4 WHEN 'Friday' THEN 5 ELSE 6 END,t.start_time").all(req.user.institution_id,req.user.id);else if(req.user.institution_role==="teacher")rows=db.prepare(sql+" WHERE c.institution_id=? AND (c.teacher_id=? OR t.subject_id IN (SELECT id FROM subjects WHERE teacher_id=?)) ORDER BY t.day,t.start_time").all(req.user.institution_id,req.user.id,req.user.id);else rows=db.prepare(sql+" WHERE c.institution_id=? ORDER BY t.day,t.start_time").all(req.user.institution_id);res.json(rows);});
 
 const upload=multer({storage:storage.multerStorage(),limits:{fileSize:10*1024*1024}});
-app.post("/api/materials",auth,roles("admin","teacher"),upload.single("file"),async(req,res,next)=>{
+app.post("/api/materials",auth,roles("admin","teacher"),upload.single("file"),validateMaterialUpload,async(req,res,next)=>{
   try{
     const file=req.file?"/uploads/"+req.file.filename:"";
     const result=await learningContentRepository.createMaterial({
