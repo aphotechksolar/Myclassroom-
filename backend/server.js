@@ -571,6 +571,20 @@ app.post("/api/assessments/:id/start",auth,roles("student"),async(req,res,next)=
     next(error);
   }
 });
+app.patch("/api/assessments/:id/answers",auth,roles("student"),async(req,res,next)=>{
+   try{
+     const result=await assessmentsRepository.saveAttemptAnswers({
+       userId:req.user.id,institutionId:req.user.institution_id,
+       assessmentId:req.params.id,answers:req.body.answers||{}
+     });
+     res.json(result);
+   }catch(error){
+     if(error.status===400)return res.status(400).json({error:error.message});
+     if(error.status===403)return res.status(403).json({error:error.message});
+     if(error instanceof TypeError)return res.status(400).json({error:error.message});
+     next(error);
+   }
+ });
 app.post("/api/assessments/:id/submit",auth,roles("student"),async(req,res,next)=>{
   try{
     const result=await assessmentsRepository.submitAttempt({userId:req.user.id,institutionId:req.user.institution_id,assessmentId:req.params.id,answers:req.body.answers||{}});
