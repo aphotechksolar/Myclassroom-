@@ -10,6 +10,7 @@ const { createNotificationsRepository } = require("./repositories/notifications"
 const { createAnnouncementsRepository } = require("./repositories/announcements");
 const { createMessagesRepository } = require("./repositories/messages");
 const { createClassesRepository } = require("./repositories/classes");
+const { createLearningContentRepository } = require("./repositories/learning-content");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const helmet = require("helmet");
@@ -48,6 +49,7 @@ const notificationsRepository = createNotificationsRepository(asyncDb);
 const announcementsRepository = createAnnouncementsRepository(asyncDb);
 const messagesRepository = createMessagesRepository(asyncDb);
 const classesRepository = createClassesRepository(asyncDb);
+const learningContentRepository = createLearningContentRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -515,10 +517,10 @@ app.get("/api/materials/:id/file",auth,(req,res)=>{
   if(!filePath || !storage.exists(filename)) return res.status(404).json({error:"File not found"});
   res.sendFile(filePath);
 });
-app.get("/api/materials",auth,(req,res)=>{let sql="SELECT m.*,c.name class_name,u.name teacher_name FROM materials m LEFT JOIN classes c ON c.id=m.class_id LEFT JOIN users u ON u.id=m.teacher_id";let rows;if(req.user.institution_role==="student")rows=db.prepare(sql+" JOIN enrollments e ON e.class_id=m.class_id WHERE c.institution_id=? AND e.student_id=? ORDER BY m.id DESC").all(req.user.institution_id,req.user.id);else if(req.user.institution_role==="teacher")rows=db.prepare(sql+" WHERE c.institution_id=? AND (m.teacher_id=? OR c.teacher_id=?) ORDER BY m.id DESC").all(req.user.institution_id,req.user.id,req.user.id);else rows=db.prepare(sql+" WHERE c.institution_id=? ORDER BY m.id DESC").all(req.user.institution_id);res.json(rows);});
+app.get("/api/materials",auth,async(req,res,next)=>{try{const rows=await learningContentRepository.listMaterialsForUser(req.user.id,req.user.institution_id,req.user.institution_role);res.json(rows);}catch(error){next(error);}});
 
 app.post("/api/assignments",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id);if(!c)return res.status(403).json({error:"Not allowed"});const r=db.prepare("INSERT INTO assignments(title,description,due_date,class_id,teacher_id,max_score) VALUES(?,?,?,?,?,?)").run(req.body.title,req.body.description||"",req.body.due_date||null,c.id,req.user.id,Number(req.body.max_score||100));db.prepare("SELECT student_id FROM enrollments WHERE class_id=?").all(c.id).forEach(s=>notify(s.student_id,"New assignment",req.body.title,req.user.institution_id));res.json(db.prepare("SELECT * FROM assignments WHERE id=?").get(r.lastInsertRowid));});
-app.get("/api/assignments",auth,(req,res)=>{let sql="SELECT a.*,c.name class_name,u.name teacher_name FROM assignments a LEFT JOIN classes c ON c.id=a.class_id LEFT JOIN users u ON u.id=a.teacher_id";let rows;if(req.user.institution_role==="student")rows=db.prepare(sql+" JOIN enrollments e ON e.class_id=a.class_id WHERE c.institution_id=? AND e.student_id=? ORDER BY a.due_date").all(req.user.institution_id,req.user.id);else if(req.user.institution_role==="teacher")rows=db.prepare(sql+" WHERE c.institution_id=? AND (a.teacher_id=? OR c.teacher_id=?) ORDER BY a.due_date").all(req.user.institution_id,req.user.id,req.user.id);else rows=db.prepare(sql+" WHERE c.institution_id=? ORDER BY a.due_date").all(req.user.institution_id);res.json(rows);});
+app.get("/api/assignments",auth,async(req,res,next)=>{try{const rows=await learningContentRepository.listAssignmentsForUser(req.user.id,req.user.institution_id,req.user.institution_role);res.json(rows);}catch(error){next(error);}});
 app.post("/api/assignments/:id/submit",auth,roles("student"),(req,res)=>{const a=db.prepare("SELECT * FROM assignments WHERE id=?").get(req.params.id);if(!a||!classForUser(req.user,a.class_id)||!db.prepare("SELECT 1 FROM enrollments WHERE class_id=? AND student_id=?").get(a.class_id,req.user.id))return res.status(403).json({error:"Not allowed"});db.prepare("INSERT INTO submissions(assignment_id,student_id,answer) VALUES(?,?,?) ON CONFLICT(assignment_id,student_id) DO UPDATE SET answer=excluded.answer,submitted_at=CURRENT_TIMESTAMP").run(a.id,req.user.id,req.body.answer||"");notify(a.teacher_id,"Assignment submitted",req.user.name+" submitted "+a.title,req.user.institution_id);res.json({ok:true});});
 app.get("/api/submissions",auth,(req,res)=>{
   const sql=`SELECT s.*,a.title,a.max_score,a.class_id,u.name student_name,u.email
