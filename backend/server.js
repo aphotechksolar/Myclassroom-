@@ -793,7 +793,18 @@ app.post("/api/assessments/:id/submit",auth,roles("student"),async(req,res,next)
     next(error);
   }
 });
-app.get("/api/results",auth,(req,res)=>{let sql=`SELECT at.*,a.title,a.type,a.pass_mark,c.name class_name,u.name student_name FROM attempts at JOIN assessments a ON a.id=at.assessment_id JOIN classes c ON c.id=a.class_id JOIN users u ON u.id=at.student_id`;let rows=req.user.institution_role==="student"?db.prepare(sql+" WHERE c.institution_id=? AND at.student_id=? ORDER BY at.id DESC").all(req.user.institution_id,req.user.id):req.user.institution_role==="teacher"?db.prepare(sql+" WHERE c.institution_id=? AND (a.teacher_id=? OR c.teacher_id=?) ORDER BY at.id DESC").all(req.user.institution_id,req.user.id,req.user.id):db.prepare(sql+" WHERE c.institution_id=? ORDER BY at.id DESC").all(req.user.institution_id);res.json(rows);});
+app.get("/api/results",auth,async(req,res,next)=>{
+  try {
+    const rows=await assessmentsRepository.listResultsForUser(
+      req.user.id,req.user.institution_id,req.user.institution_role
+    );
+    res.json(rows);
+  } catch(error) {
+    if(error.status===403) return res.status(403).json({error:error.message});
+    if(error instanceof TypeError) return res.status(400).json({error:error.message});
+    next(error);
+  }
+});
 app.get("/api/gradebook",auth,roles("admin","teacher"),(req,res)=>{let sql=`SELECT u.id student_id,u.name student_name,c.id class_id,c.name class_name,
 (SELECT ROUND(AVG(at.percentage),1) FROM attempts at JOIN assessments aa ON aa.id=at.assessment_id WHERE at.student_id=u.id AND aa.class_id=c.id AND at.status='submitted') assessment_average,
 (SELECT ROUND(AVG(s.score*100.0/a.max_score),1) FROM submissions s JOIN assignments a ON a.id=s.assignment_id WHERE s.student_id=u.id AND a.class_id=c.id AND s.score IS NOT NULL) assignment_average

@@ -347,6 +347,33 @@ function createAssessmentsRepository(database) {
     async expireOverdueAttempts() { return expireOverdueAttempts(); },
     async createForClass(input) { return createForClass(input); },
 
+    async listResultsForUser(userId, institutionId, role) {
+      if (!["school_admin", "teacher", "student"].includes(role)) {
+        const error = new Error("Not allowed");
+        error.status = 403;
+        throw error;
+      }
+      const id = validateScope(userId, institutionId, role);
+      let visibility = "";
+      const params = [institutionId];
+      if (role === "student") {
+        visibility = " AND at.student_id = $2";
+        params.push(id);
+      } else if (role === "teacher") {
+        visibility = " AND (a.teacher_id = $2 OR c.teacher_id = $2)";
+        params.push(id);
+      }
+      return database.many(
+        `SELECT at.*, a.title, a.type, a.pass_mark, c.name class_name, u.name student_name
+         FROM attempts at
+         JOIN assessments a ON a.id = at.assessment_id
+         JOIN classes c ON c.id = a.class_id
+         JOIN users u ON u.id = at.student_id
+         WHERE c.institution_id = $1${visibility}
+         ORDER BY at.id DESC`,
+        params
+      );
+    },
     async listForUser(userId, institutionId, role) {
       const id = validateScope(userId, institutionId, role);
       let visibility = "";
