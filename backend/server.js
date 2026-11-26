@@ -160,20 +160,44 @@ if (!count && process.env.NODE_ENV !== "production" && process.env.SEED_DEMO_DAT
   db.prepare("INSERT INTO school_settings(key,value) VALUES('school_name',?)").run(process.env.SCHOOL_NAME || "MyClassroom Academy");
 }
 
+function activeMembership(userId, institutionId) {
+  const sql = `SELECT m.institution_id,m.role,m.status,i.name institution_name,i.status institution_status
+    FROM institution_memberships m JOIN institutions i ON i.id=m.institution_id
+    WHERE m.user_id=? AND m.status='active' AND i.status='active'`;
+  return institutionId
+    ? db.prepare(sql + " AND m.institution_id=?").get(userId,institutionId)
+    : db.prepare(sql + " ORDER BY m.created_at LIMIT 1").get(userId);
+}
 function auth(req,res,next){
   const h=req.headers.authorization||"";
   const token=h.startsWith("Bearer ")?h.slice(7):null;
   if(!token) return res.status(401).json({error:"Authentication required"});
-  try { req.user=jwt.verify(token,SECRET); next(); } catch(e){ return res.status(401).json({error:"Invalid or expired token"}); }
+  try {
+    req.user=jwt.verify(token,SECRET);
+    const membership=activeMembership(req.user.id,req.user.institution_id);
+    if(!membership) return res.status(403).json({error:"No active institution membership. Contact your school administrator."});
+    req.user.institution_id=membership.institution_id;
+    req.user.institution_role=membership.role;
+    req.user.institution_name=membership.institution_name;
+    next();
+  } catch(e){ return res.status(401).json({error:"Invalid or expired token"}); }
 }
-function roles(...allowed){ return (req,res,next)=>allowed.includes(req.user.role)?next():res.status(403).json({error:"Not allowed"}); }
-function sign(user){ return jwt.sign({id:user.id,name:user.name,email:user.email,role:user.role},SECRET,{expiresIn:"7d"}); }
+function roles(...allowed){ return (req,res,next)=>{
+  const role=req.user.institution_role==="school_admin"?"admin":req.user.institution_role;
+  return allowed.includes(role)?next():res.status(403).json({error:"Not allowed"});
+}; }
+function sign(user){
+  const membership=activeMembership(user.id);
+  if(!membership) throw new Error("User has no active institution membership");
+  return jwt.sign({id:user.id,name:user.name,email:user.email,role:user.role,institution_id:membership.institution_id,institution_role:membership.role},SECRET,{expiresIn:"7d"});
+}
 function log(actor,action,details=""){ db.prepare("INSERT INTO audit_log(actor_id,action,details) VALUES(?,?,?)").run(actor,action,details); }
 function notify(userId,title,body){ if(userId) db.prepare("INSERT INTO notifications(user_id,title,body) VALUES(?,?,?)").run(userId,title,body); }
 function classForUser(user, classId){
-  const c=db.prepare("SELECT * FROM classes WHERE id=?").get(classId);
+  const c=db.prepare("SELECT * FROM classes WHERE id=? AND institution_id=?").get(classId,user.institution_id);
   if(!c) return null;
-  if(user.role==="admin" || c.teacher_id===user.id || db.prepare("SELECT 1 FROM enrollments WHERE class_id=? AND student_id=?").get(classId,user.id)) return c;
+  if(user.institution_role==="school_admin" || (c.teacher_id===user.id && user.institution_role==="teacher") ||
+    (user.institution_role==="student" && db.prepare("SELECT 1 FROM enrollments WHERE class_id=? AND student_id=?").get(classId,user.id))) return c;
   return null;
 }
 function normalizeQuestions(raw){
@@ -195,13 +219,19 @@ app.post("/api/auth/register",(req,res)=>{
     const r=db.prepare("INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,?)")
       .run(String(name).trim(),String(email).trim().toLowerCase(),bcrypt.hashSync(password,10),safeRole);
     const u=db.prepare("SELECT id,name,email,role,phone,bio,created_at FROM users WHERE id=?").get(r.lastInsertRowid);
+    const institution=db.prepare("SELECT id FROM institutions WHERE id='legacy-school' AND status='active'").get();
+    if(!institution) throw new Error("No institution is configured for self-registration");
+    db.prepare("INSERT INTO institution_memberships(institution_id,user_id,role) VALUES(?,?,?)")
+      .run(institution.id,u.id,safeRole);
     res.json({user:u,token:sign(u)});
   }catch(e){res.status(400).json({error:"Email already exists"});}
 });
 app.post("/api/auth/login",(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE email=?").get(String(req.body.email||"").trim().toLowerCase());
   if(!u||!bcrypt.compareSync(req.body.password||"",u.password_hash)) return res.status(401).json({error:"Invalid email or password"});
-  res.json({user:{id:u.id,name:u.name,email:u.email,role:u.role,phone:u.phone,bio:u.bio},token:sign(u)});
+  const membership=activeMembership(u.id);
+  if(!membership) return res.status(403).json({error:"This account has no active school membership. Contact your school administrator."});
+  res.json({user:{id:u.id,name:u.name,email:u.email,role:u.role,phone:u.phone,bio:u.bio,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(u)});
 });
 app.post("/api/auth/change-password",auth,(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE id=?").get(req.user.id);
