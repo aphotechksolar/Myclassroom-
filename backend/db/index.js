@@ -1,4 +1,5 @@
 const { openSqliteDatabase } = require("./sqlite");
+const { openAsyncSqliteDatabase } = require("./sqlite-async");
 
 /**
  * Central database entry point. SQLite remains the only supported runtime
@@ -10,4 +11,12 @@ function createDatabase(filename, driver = process.env.DATABASE_DRIVER || "sqlit
   throw new Error(`Unsupported DATABASE_DRIVER "${driver}". Only "sqlite" is available in this release.`);
 }
 
-module.exports = { createDatabase };
+/**
+ * Opens the opt-in asynchronous repository interface over SQLite.
+ * The existing synchronous application entry point is intentionally unchanged.
+ */
+function createAsyncSqliteDatabase(filename) {
+  return openAsyncSqliteDatabase(openSqliteDatabase(filename));
+}
+
+module.exports = { createDatabase, createAsyncSqliteDatabase };
