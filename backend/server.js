@@ -40,7 +40,7 @@ app.disable("x-powered-by");
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors(corsOptions));
 app.use(express.json({limit:"2mb"}));
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: "Too many authentication attempts. Please try again later." } });
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: process.env.NODE_ENV === "test" ? 100 : 10, standardHeaders: true, legacyHeaders: false, message: { error: "Too many authentication attempts. Please try again later." } });
 app.use("/api/auth", authLimiter);
 // Uploaded learning files are served only through authenticated, institution-scoped routes.
 
@@ -152,6 +152,8 @@ CREATE TABLE IF NOT EXISTS audit_log(
  created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 `);
+
+db.exec("CREATE TABLE IF NOT EXISTS password_change_required (user_id INTEGER PRIMARY KEY, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);");
 
 // Ensure the tenant foundation exists before authentication and seed logic run.
 db.exec(`
@@ -284,6 +286,8 @@ function auth(req,res,next){
     req.user.institution_id=membership.institution_id;
     req.user.institution_role=membership.role;
     req.user.institution_name=membership.institution_name;
+    const mustChangePassword=!!db.prepare("SELECT 1 FROM password_change_required WHERE user_id=?").get(req.user.id);
+    if(mustChangePassword && !(req.method==="POST" && req.path==="/api/auth/change-password")) return res.status(403).json({error:"You must change your temporary password before accessing your portal.",mustChangePassword:true});
     if(membership.role==="parent" && !/^\/api\/guardian\/(children(?:\/\d+\/performance)?)?$/.test(req.path)) {
       return res.status(403).json({error:"Parent accounts can only access their verified children's information."});
     }
@@ -368,6 +372,7 @@ app.post("/api/platform/institutions",platformOwner,(req,res)=>{
    const user=db.prepare("INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,'admin')").run(adminName,email,bcrypt.hashSync(password,12));
    db.prepare("INSERT INTO institutions(id,name,slug,institution_type,country_code,timezone,currency_code,status) VALUES(?,?,?,?,?,?,?,'active')").run(id,name,slug,type,country,timezone,currency);
    db.prepare("INSERT INTO institution_memberships(institution_id,user_id,role,status) VALUES(?,?,'school_admin','active')").run(id,user.lastInsertRowid);
+   db.prepare("INSERT INTO password_change_required(user_id) VALUES(?)").run(user.lastInsertRowid);
    db.prepare("INSERT INTO institution_settings(institution_id,key,value) VALUES(?,?,?)").run(id,"school_name",name);
    db.prepare("INSERT INTO platform_audit_log(action,institution_id,details) VALUES('institution_created',?,?)").run(id,JSON.stringify({slug,admin_email:email}));
    return user.lastInsertRowid;
@@ -465,7 +470,8 @@ app.post("/api/auth/login",(req,res)=>{
     ? memberships.find(item=>item.institution_id===selectedInstitutionId)
     : memberships[0];
   if(!membership) return res.status(403).json({error:"This account has no active membership in the selected school."});
-  res.json({user:{id:u.id,name:u.name,email:u.email,role:membership.role==="school_admin"?"admin":membership.role,phone:u.phone,bio:u.bio,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(u,membership.institution_id)});
+  const mustChangePassword=!!db.prepare("SELECT 1 FROM password_change_required WHERE user_id=?").get(u.id);
+  res.json({user:{id:u.id,name:u.name,email:u.email,role:membership.role==="school_admin"?"admin":membership.role,phone:u.phone,bio:u.bio,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(u,membership.institution_id),must_change_password:mustChangePassword});
 });
 app.post("/api/auth/switch-institution",auth,(req,res)=>{
   const membership=activeMembership(req.user.id,String(req.body.institution_id||""));
@@ -477,9 +483,15 @@ app.post("/api/auth/change-password",auth,(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE id=?").get(req.user.id);
   if(!u||!bcrypt.compareSync(req.body.currentPassword||"",u.password_hash)) return res.status(400).json({error:"Current password is incorrect"});
   const nextPassword=String(req.body.newPassword||"");
-  if(nextPassword.length < 10 || nextPassword.length > 128) return res.status(400).json({error:"New password must be between 10 and 128 characters"});
-  db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(bcrypt.hashSync(nextPassword,10),u.id);
-  log(u.id,"Changed password","",req.user.institution_id); res.json({ok:true});
+  const mustChange=!!db.prepare("SELECT 1 FROM password_change_required WHERE user_id=?").get(u.id);
+  const minimum=mustChange?12:10;
+  if(nextPassword.length < minimum || nextPassword.length > 128) return res.status(400).json({error:`New password must be between ${minimum} and 128 characters`});
+  if(nextPassword===String(req.body.currentPassword||"")) return res.status(400).json({error:"Choose a password different from your current password"});
+  db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(bcrypt.hashSync(nextPassword,12),u.id);
+  if(mustChange) db.prepare("DELETE FROM password_change_required WHERE user_id=?").run(u.id);
+  log(u.id,mustChange?"Completed temporary password change":"Changed password","",req.user.institution_id);
+  const updated=db.prepare("SELECT * FROM users WHERE id=?").get(u.id);
+  res.json({ok:true,token:sign(updated,req.user.institution_id)});
 });
 app.post("/api/auth/request-reset",(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE email=?").get(String(req.body.email||"").toLowerCase());
@@ -526,6 +538,7 @@ app.post("/api/admin/users",auth,roles("admin"),(req,res)=>{
     const create=db.transaction(()=>{
       const userId=db.prepare("INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,?)").run(name,email,bcrypt.hashSync(password,12),role==="school_admin"?"admin":role).lastInsertRowid;
       db.prepare("INSERT INTO institution_memberships(institution_id,user_id,role,status) VALUES(?,?,?,'active')").run(req.user.institution_id,userId,role);
+      db.prepare("INSERT INTO password_change_required(user_id) VALUES(?)").run(userId);
       return db.prepare("SELECT u.id,u.name,u.email,u.role,m.role institution_role,u.phone,u.bio,u.created_at FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE u.id=? AND m.institution_id=?").get(userId,req.user.institution_id);
     });
     const user=create();log(req.user.id,"Created school user",JSON.stringify({user_id:user.id,role}),req.user.institution_id);res.status(201).json(user);
