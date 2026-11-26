@@ -4,7 +4,7 @@ const path = require("path");
 const fs = require("fs");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const Database = require("better-sqlite3");
+const { createDatabase } = require("./db");
 const multer = require("multer");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
@@ -36,8 +36,7 @@ const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeade
 app.use("/api/auth", authLimiter);
 // Uploaded learning files are served only through authenticated, institution-scoped routes.
 
-const db = new Database(path.join(DATA, "myclassroom.db"));
-db.pragma("foreign_keys = ON");
+const db = createDatabase(path.join(DATA, "myclassroom.db"));
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users(
