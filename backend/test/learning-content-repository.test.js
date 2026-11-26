@@ -82,3 +82,54 @@ test("learning content repositories reject invalid authenticated scope", async (
     await database.close();
   }
 });
+
+test("material creation is scoped to the institution and class teacher", async () => {
+  const { database, repository } = setup();
+  try {
+    const created = await repository.createMaterial({
+      userId: 1, institutionId: "school-a", role: "teacher", classId: 10,
+      title: "New notes", description: "Chapter 2", url: "https://example.test",
+      fileUrl: "/uploads/new.pdf"
+    });
+    assert.equal(created.material.title, "New notes");
+    assert.equal(created.material.file_url, "/uploads/new.pdf");
+    assert.deepEqual(created.studentIds, [101]);
+    await assert.rejects(repository.createMaterial({
+      userId: 1, institutionId: "school-a", role: "teacher", classId: 11,
+      title: "Forbidden", fileUrl: ""
+    }), error => error.status === 403);
+    await assert.rejects(repository.createMaterial({
+      userId: 1, institutionId: "school-a", role: "teacher", classId: 12,
+      title: "Cross-school", fileUrl: ""
+    }), error => error.status === 403);
+  } finally {
+    await database.close();
+  }
+});
+
+test("assignment creation is scoped to the institution and class teacher", async () => {
+  const { database, repository } = setup();
+  try {
+    const created = await repository.createAssignment({
+      userId: 1, institutionId: "school-a", role: "teacher", classId: 10,
+      title: "New task", description: "Solve questions", dueDate: "2026-03-01", maxScore: 50
+    });
+    assert.equal(created.assignment.title, "New task");
+    assert.equal(created.assignment.max_score, 50);
+    assert.deepEqual(created.studentIds, [101]);
+    const adminCreated = await repository.createAssignment({
+      userId: 900, institutionId: "school-a", role: "school_admin", classId: 11,
+      title: "Admin task"
+    });
+    assert.equal(adminCreated.assignment.max_score, 100);
+    assert.deepEqual(adminCreated.studentIds, [102]);
+    await assert.rejects(repository.createAssignment({
+      userId: 1, institutionId: "school-a", role: "teacher", classId: 11, title: "Forbidden"
+    }), error => error.status === 403);
+    await assert.rejects(repository.createAssignment({
+      userId: 101, institutionId: "school-a", role: "student", classId: 10, title: "Forbidden"
+    }), /Only school admins and teachers/);
+  } finally {
+    await database.close();
+  }
+});
