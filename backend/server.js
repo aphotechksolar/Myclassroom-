@@ -243,7 +243,7 @@ function sign(user,institutionId){
   const effectiveRole=membership.role==="school_admin"?"admin":membership.role;
   return jwt.sign({id:user.id,name:user.name,email:user.email,role:effectiveRole,institution_id:membership.institution_id,institution_role:membership.role},SECRET,{expiresIn:"7d"});
 }
-function log(actor,action,details=""){ const m=activeMembership(actor); db.prepare("INSERT INTO audit_log(actor_id,action,details,institution_id) VALUES(?,?,?,?)").run(actor,action,details,m?.institution_id||null); }
+function log(actor,action,details="",institutionId=null){ const id=institutionId||activeMembership(actor)?.institution_id||null; db.prepare("INSERT INTO audit_log(actor_id,action,details,institution_id) VALUES(?,?,?,?)").run(actor,action,details,id); }
 function notify(userId,title,body){ if(userId) db.prepare("INSERT INTO notifications(user_id,title,body) VALUES(?,?,?)").run(userId,title,body); }
 function classForUser(user, classId){
   const c=db.prepare("SELECT * FROM classes WHERE id=? AND institution_id=?").get(classId,user.institution_id);
@@ -297,7 +297,7 @@ app.post("/api/auth/change-password",auth,(req,res)=>{
   const nextPassword=String(req.body.newPassword||"");
   if(nextPassword.length < 10 || nextPassword.length > 128) return res.status(400).json({error:"New password must be between 10 and 128 characters"});
   db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(bcrypt.hashSync(nextPassword,10),u.id);
-  log(u.id,"Changed password"); res.json({ok:true});
+  log(u.id,"Changed password","",req.user.institution_id); res.json({ok:true});
 });
 app.post("/api/auth/request-reset",(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE email=?").get(String(req.body.email||"").toLowerCase());
@@ -340,14 +340,14 @@ app.patch("/api/admin/users/:id",auth,roles("admin"),(req,res)=>{
   if(!u) return res.status(404).json({error:"User not found in this school"});
   db.prepare("UPDATE users SET name=?,phone=?,bio=? WHERE id=?").run(req.body.name??u.name,req.body.phone??u.phone,req.body.bio??u.bio,u.id);
   if(role) db.prepare("UPDATE institution_memberships SET role=? WHERE institution_id=? AND user_id=?").run(role==="admin"?"school_admin":role,req.user.institution_id,u.id);
-  log(req.user.id,"Updated user",String(u.id)); res.json({ok:true});
+  log(req.user.id,"Updated user",String(u.id),req.user.institution_id); res.json({ok:true});
 });
 app.delete("/api/admin/users/:id",auth,roles("admin"),(req,res)=>{
   if(Number(req.params.id)===req.user.id) return res.status(400).json({error:"You cannot delete yourself"});
   const target=db.prepare("SELECT user_id FROM institution_memberships WHERE institution_id=? AND user_id=?").get(req.user.institution_id,req.params.id);
   if(!target) return res.status(404).json({error:"User not found in this school"});
   db.prepare("DELETE FROM institution_memberships WHERE institution_id=? AND user_id=?").run(req.user.institution_id,req.params.id);
-  log(req.user.id,"Removed school membership",String(req.params.id)); res.json({ok:true});
+  log(req.user.id,"Removed school membership",String(req.params.id),req.user.institution_id); res.json({ok:true});
 });
 app.get("/api/audit",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT a.*,u.name actor_name FROM audit_log a LEFT JOIN users u ON u.id=a.actor_id WHERE a.institution_id=? ORDER BY a.id DESC LIMIT 100").all(req.user.institution_id)));
 
@@ -364,7 +364,7 @@ app.post("/api/classes",auth,roles("admin","teacher"),(req,res)=>{
     const teacherId=req.user.institution_role==="teacher"?req.user.id:(req.body.teacher_id||null);
     if(teacherId && !db.prepare("SELECT 1 FROM institution_memberships WHERE institution_id=? AND user_id=? AND role='teacher' AND status='active'").get(req.user.institution_id,teacherId)) return res.status(400).json({error:"Teacher must belong to this school"});
     const r=db.prepare("INSERT INTO classes(name,code,description,teacher_id,live_link,institution_id) VALUES(?,?,?,?,?,?)").run(req.body.name,code,req.body.description||"",teacherId,req.body.live_link||"",req.user.institution_id);
-    log(req.user.id,"Created class",String(r.lastInsertRowid)); res.json(db.prepare("SELECT * FROM classes WHERE id=? AND institution_id=?").get(r.lastInsertRowid,req.user.institution_id));
+    log(req.user.id,"Created class",String(r.lastInsertRowid),req.user.institution_id); res.json(db.prepare("SELECT * FROM classes WHERE id=? AND institution_id=?").get(r.lastInsertRowid,req.user.institution_id));
   }catch(e){res.status(400).json({error:"Class code must be unique"});}
 });
 app.patch("/api/classes/:id",auth,roles("admin","teacher"),(req,res)=>{
@@ -376,7 +376,7 @@ app.patch("/api/classes/:id",auth,roles("admin","teacher"),(req,res)=>{
 app.delete("/api/classes/:id",auth,roles("admin","teacher"),(req,res)=>{
   const c=db.prepare("SELECT * FROM classes WHERE id=? AND institution_id=?").get(req.params.id,req.user.institution_id); if(!c) return res.status(404).json({error:"Not found"});
   if(req.user.role==="teacher"&&c.teacher_id!==req.user.id) return res.status(403).json({error:"Not your class"});
-  db.prepare("DELETE FROM classes WHERE id=?").run(c.id); log(req.user.id,"Deleted class",String(c.id)); res.json({ok:true});
+  db.prepare("DELETE FROM classes WHERE id=?").run(c.id); log(req.user.id,"Deleted class",String(c.id),req.user.institution_id); res.json({ok:true});
 });
 app.post("/api/classes/join",auth,roles("student"),(req,res)=>{
   const c=db.prepare("SELECT * FROM classes WHERE code=? AND institution_id=?").get(String(req.body.code||"").toUpperCase(),req.user.institution_id);
@@ -501,7 +501,7 @@ app.get("/api/report-card/:studentId",auth,(req,res)=>{
   res.json({school,student,subjects,attendance:att});
 });
 app.get("/api/settings",auth,(req,res)=>res.json(Object.fromEntries(db.prepare("SELECT key,value FROM institution_settings WHERE institution_id=?").all(req.user.institution_id).map(x=>[x.key,x.value]))));
-app.patch("/api/settings",auth,roles("admin"),(req,res)=>{for(const [k,v] of Object.entries(req.body)){db.prepare("INSERT INTO institution_settings(institution_id,key,value,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(institution_id,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").run(req.user.institution_id,k,String(v));}log(req.user.id,"Updated school settings");res.json({ok:true});});
+app.patch("/api/settings",auth,roles("admin"),(req,res)=>{for(const [k,v] of Object.entries(req.body)){db.prepare("INSERT INTO institution_settings(institution_id,key,value,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(institution_id,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").run(req.user.institution_id,k,String(v));}log(req.user.id,"Updated school settings","",req.user.institution_id);res.json({ok:true});});
 
 app.get("/api/dashboard",auth,(req,res)=>{
   const institutionId=req.user.institution_id;
