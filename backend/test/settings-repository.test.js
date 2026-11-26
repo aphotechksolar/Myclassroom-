@@ -46,3 +46,50 @@ test("settings repository rejects missing institution scope", async () => {
     await database.close();
   }
 });
+
+
+test("settings repository updates only the requested institution atomically", async () => {
+  const sqlite = createDatabase(":memory:");
+  const database = openAsyncSqliteDatabase(sqlite);
+  try {
+    sqlite.exec(`
+      CREATE TABLE institution_settings (
+        institution_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        updated_at TEXT,
+        PRIMARY KEY (institution_id, key)
+      );
+      INSERT INTO institution_settings(institution_id, key, value) VALUES
+        ("school-a", "school_name", "Old A"),
+        ("school-b", "school_name", "School B");
+    `);
+    const repository = createSettingsRepository(database);
+    assert.deepEqual(await repository.updateForInstitution("school-a", {
+      school_name: "New A",
+      theme: "dark"
+    }), { updated: 2 });
+    assert.deepEqual(await repository.listForInstitution("school-a"), [
+      { key: "school_name", value: "New A" },
+      { key: "theme", value: "dark" }
+    ]);
+    assert.deepEqual(await repository.listForInstitution("school-b"), [
+      { key: "school_name", value: "School B" }
+    ]);
+  } finally {
+    await database.close();
+  }
+});
+
+test("settings repository rejects invalid update scope and payload", async () => {
+  const sqlite = createDatabase(":memory:");
+  const database = openAsyncSqliteDatabase(sqlite);
+  try {
+    const repository = createSettingsRepository(database);
+    await assert.rejects(repository.updateForInstitution("", { theme: "dark" }), /valid institution ID/);
+    await assert.rejects(repository.updateForInstitution("school-a", null), /Settings must be supplied/);
+    await assert.rejects(repository.updateForInstitution("school-a", []), /Settings must be supplied/);
+  } finally {
+    await database.close();
+  }
+});
