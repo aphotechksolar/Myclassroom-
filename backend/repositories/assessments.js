@@ -34,6 +34,54 @@ function createAssessmentsRepository(database) {
     );
   }
 
+  function parseAnswers(raw) {
+    try {
+      const parsed = JSON.parse(raw || "{}");
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function sanitizeAnswers(questions, answers) {
+    const safe = {};
+    for (const [key, value] of Object.entries(answers)) {
+      const questionIndex = Number(key);
+      const optionIndex = Number(value);
+      if (Number.isInteger(questionIndex) && questionIndex >= 0 && questionIndex < questions.length &&
+          Number.isInteger(optionIndex) && optionIndex >= 0 &&
+          Array.isArray(questions[questionIndex].options) &&
+          optionIndex < questions[questionIndex].options.length) {
+        safe[questionIndex] = optionIndex;
+      }
+    }
+    return safe;
+  }
+
+  function calculateResult(questions, answers, passMark) {
+    let score = 0;
+    questions.forEach((question, index) => {
+      if (Object.prototype.hasOwnProperty.call(answers, index) &&
+          Number(answers[index]) === Number(question.answer)) score++;
+    });
+    const percentage = questions.length ? Math.round(score / questions.length * 100) : 0;
+    return { score, percentage, status: percentage >= Number(passMark) ? "PASS" : "FAIL" };
+  }
+
+  async function finalizeTimedOut(tx, attempt, assessment) {
+    let questions;
+    try { questions = JSON.parse(assessment.questions_json); }
+    catch { throw new Error("Assessment questions are unavailable"); }
+    const answers = sanitizeAnswers(questions, parseAnswers(attempt.answers_json));
+    const result = calculateResult(questions, answers, assessment.pass_mark);
+    await tx.execute(
+      "UPDATE attempts SET submitted_at = expires_at, score = $1, percentage = $2, status = $3, answers_json = $4 WHERE id = $5 AND student_id = $6 AND submitted_at IS NULL",
+      [result.score, result.percentage, result.status, JSON.stringify(answers), attempt.id, attempt.student_id]
+    );
+    const saved = await tx.one("SELECT * FROM attempts WHERE id = $1 AND student_id = $2", [attempt.id, attempt.student_id]);
+    return { ...saved, timed_out: true };
+  }
+
   async function createForClass(input) {
     const id = validateScope(input.userId, input.institutionId, input.role);
     if (!["school_admin", "teacher"].includes(input.role)) {
@@ -84,9 +132,9 @@ function createAssessmentsRepository(database) {
     if (!Number.isSafeInteger(Number(input.assessmentId)) || Number(input.assessmentId) <= 0) {
       throw new TypeError("A valid assessment ID is required");
     }
-    return database.transaction(async (tx) => {
+    const result = await database.transaction(async (tx) => {
       const assessment = await tx.one(
-        "SELECT a.id, a.duration_minutes, a.questions_json FROM assessments a JOIN classes c ON c.id = a.class_id JOIN enrollments e ON e.class_id = c.id AND e.student_id = $2 WHERE a.id = $1 AND c.institution_id = $3",
+        "SELECT a.id, a.duration_minutes, a.pass_mark, a.questions_json FROM assessments a JOIN classes c ON c.id = a.class_id JOIN enrollments e ON e.class_id = c.id AND e.student_id = $2 WHERE a.id = $1 AND c.institution_id = $3",
         [Number(input.assessmentId), id, input.institutionId]
       );
       if (!assessment) {
@@ -99,12 +147,22 @@ function createAssessmentsRepository(database) {
         [assessment.id, id]
       );
       if (existing && existing.submitted_at) {
-        const error = new Error("Assessment already submitted");
+        const timedOut = existing.submitted_at === existing.expires_at;
+        const error = new Error(timedOut ? "Assessment time has expired" : "Assessment already submitted");
         error.status = 400;
-        error.attempt = existing;
+        error.attempt = { ...existing, timed_out: timedOut };
         throw error;
       }
       let attempt = existing;
+      if (attempt && (!attempt.expires_at || !Number.isFinite(Date.parse(attempt.expires_at)))) {
+        const error = new Error("This attempt has no valid deadline. Contact your school administrator.");
+        error.status = 400;
+        throw error;
+      }
+      if (attempt && Date.parse(attempt.expires_at) <= Date.now()) {
+        const expired = await finalizeTimedOut(tx, attempt, assessment);
+        return { __expiredAttempt: expired };
+      }
       if (!attempt) {
         const duration = Number(assessment.duration_minutes || 20);
         const expiresAt = new Date(Date.now() + duration * 60000).toISOString();
@@ -125,6 +183,13 @@ function createAssessmentsRepository(database) {
         }))
       };
     });
+    if (result && result.__expiredAttempt) {
+      const error = new Error("Assessment time has expired");
+      error.status = 400;
+      error.attempt = result.__expiredAttempt;
+      throw error;
+    }
+    return result;
   }
 
   async function submitAttempt(input) {
@@ -150,28 +215,104 @@ function createAssessmentsRepository(database) {
         error.status = 400;
         throw error;
       }
-      if (attempt.submitted_at) return attempt;
+      if (attempt.submitted_at) {
+        return {
+          ...attempt,
+          timed_out: attempt.submitted_at === attempt.expires_at
+        };
+      }
+      const deadline = Date.parse(attempt.expires_at);
+      if (!Number.isFinite(deadline)) {
+        const error = new Error("This attempt has no valid deadline. Contact your school administrator.");
+        error.status = 400;
+        throw error;
+      }
+      if (Date.now() >= deadline) {
+        return finalizeTimedOut(tx, attempt, assessment);
+      }
       let questions;
       try { questions = JSON.parse(assessment.questions_json); }
       catch { throw new Error("Assessment questions are unavailable"); }
-      let score = 0;
-      questions.forEach((question, index) => {
-        if (Object.prototype.hasOwnProperty.call(answers, index) &&
-            Number(answers[index]) === Number(question.answer)) score++;
-      });
-      const percentage = questions.length ? Math.round(score / questions.length * 100) : 0;
-      const status = percentage >= Number(assessment.pass_mark) ? "PASS" : "FAIL";
+      const safeAnswers = sanitizeAnswers(questions, answers);
+      const result = calculateResult(questions, safeAnswers, assessment.pass_mark);
       await tx.execute(
         "UPDATE attempts SET submitted_at = CURRENT_TIMESTAMP, score = $1, percentage = $2, status = $3, answers_json = $4 WHERE id = $5 AND student_id = $6",
-        [score, percentage, status, JSON.stringify(answers), attempt.id, id]
+        [result.score, result.percentage, result.status, JSON.stringify(safeAnswers), attempt.id, id]
       );
       return tx.one("SELECT * FROM attempts WHERE id = $1 AND student_id = $2", [attempt.id, id]);
+    });
+  }
+
+  async function saveAttemptAnswers(input) {
+    const id = validateScope(input.userId, input.institutionId, "student");
+    if (!Number.isSafeInteger(Number(input.assessmentId)) || Number(input.assessmentId) <= 0) {
+      throw new TypeError("A valid assessment ID is required");
+    }
+    const answers = input.answers;
+    if (!answers || typeof answers !== "object" || Array.isArray(answers)) {
+      throw new TypeError("Answers must be an object");
+    }
+    return database.transaction(async (tx) => {
+      const assessment = await tx.one(
+        "SELECT a.id, a.pass_mark, a.questions_json FROM assessments a JOIN classes c ON c.id = a.class_id JOIN enrollments e ON e.class_id = c.id AND e.student_id = $2 WHERE a.id = $1 AND c.institution_id = $3",
+        [Number(input.assessmentId), id, input.institutionId]
+      );
+      const attempt = assessment && await tx.one(
+        "SELECT * FROM attempts WHERE assessment_id = $1 AND student_id = $2",
+        [assessment.id, id]
+      );
+      if (!assessment || !attempt) {
+        const error = new Error("Attempt not found");
+        error.status = 400;
+        throw error;
+      }
+      if (attempt.submitted_at) {
+        return { ok: true, timed_out: attempt.submitted_at === attempt.expires_at };
+      }
+      const deadline = Date.parse(attempt.expires_at);
+      if (!Number.isFinite(deadline)) {
+        const error = new Error("This attempt has no valid deadline. Contact your school administrator.");
+        error.status = 400;
+        throw error;
+      }
+      let questions;
+      try { questions = JSON.parse(assessment.questions_json); }
+      catch { throw new Error("Assessment questions are unavailable"); }
+      if (Date.now() >= deadline) {
+        const expired = await finalizeTimedOut(tx, attempt, assessment);
+        return { ok: true, timed_out: true, attempt: expired };
+      }
+      const safeAnswers = sanitizeAnswers(questions, answers);
+      await tx.execute(
+        "UPDATE attempts SET answers_json = $1 WHERE id = $2 AND student_id = $3 AND submitted_at IS NULL",
+        [JSON.stringify(safeAnswers), attempt.id, id]
+      );
+      return { ok: true, timed_out: false };
+    });
+  }
+
+  async function expireOverdueAttempts() {
+    const now = new Date().toISOString();
+    return database.transaction(async (tx) => {
+      const overdue = await tx.many(
+        "SELECT at.*, a.pass_mark, a.questions_json FROM attempts at JOIN assessments a ON a.id = at.assessment_id WHERE at.submitted_at IS NULL AND at.expires_at IS NOT NULL AND at.expires_at <= $1 ORDER BY at.id",
+        [now]
+      );
+      for (const attempt of overdue) {
+        await finalizeTimedOut(tx, attempt, {
+          pass_mark: attempt.pass_mark,
+          questions_json: attempt.questions_json
+        });
+      }
+      return overdue.length;
     });
   }
 
   return Object.freeze({
     async startAttempt(input) { return startAttempt(input); },
     async submitAttempt(input) { return submitAttempt(input); },
+    async saveAttemptAnswers(input) { return saveAttemptAnswers(input); },
+    async expireOverdueAttempts() { return expireOverdueAttempts(); },
     async createForClass(input) { return createForClass(input); },
 
     async listForUser(userId, institutionId, role) {

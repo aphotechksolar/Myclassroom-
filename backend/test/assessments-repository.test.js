@@ -208,3 +208,140 @@ test("submission rejects missing attempts, invalid answer payloads and cross-sch
     await assert.rejects(repository.submitAttempt({ userId: 101, institutionId: "school-b", assessmentId: 20, answers: {} }), error => error.status === 400);
   } finally { await database.close(); }
 });
+
+test("late exam submissions are closed by server time and cannot earn marks", async () => {
+  const { database, repository } = setup();
+  try {
+    const expiredAt = new Date(Date.now() - 60_000).toISOString();
+    await database.execute(
+      "INSERT INTO attempts(assessment_id, student_id, expires_at) VALUES($1, $2, $3)",
+      [20, 101, expiredAt]
+    );
+    const result = await repository.submitAttempt({
+      userId: 101, institutionId: "school-a", assessmentId: 20,
+      answers: { 0: 0, 1: 0 }
+    });
+    assert.equal(result.timed_out, true);
+    assert.equal(result.status, "FAIL");
+    assert.equal(result.score, 0);
+    assert.equal(result.percentage, 0);
+    assert.equal(result.answers_json, "{}");
+    assert.equal(result.submitted_at, expiredAt);
+  } finally { await database.close(); }
+});
+
+test("resuming an expired attempt finalizes it and commits the timeout", async () => {
+  const { database, repository } = setup();
+  try {
+    const expiredAt = new Date(Date.now() - 60_000).toISOString();
+    await database.execute(
+      "INSERT INTO attempts(assessment_id, student_id, expires_at) VALUES($1, $2, $3)",
+      [20, 101, expiredAt]
+    );
+    await assert.rejects(
+      repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 }),
+      error => error.status === 400 && error.attempt.timed_out === true
+    );
+    const saved = await database.one(
+      "SELECT * FROM attempts WHERE assessment_id = $1 AND student_id = $2",
+      [20, 101]
+    );
+    assert.equal(saved.submitted_at, expiredAt);
+    assert.equal(saved.status, "FAIL");
+    assert.equal(saved.answers_json, "{}");
+  } finally { await database.close(); }
+});
+
+test("expiry sweep closes overdue attempts but leaves active and completed attempts alone", async () => {
+  const { database, repository } = setup();
+  try {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const future = new Date(Date.now() + 60_000).toISOString();
+    await database.execute(
+      "INSERT INTO attempts(assessment_id, student_id, expires_at) VALUES($1, $2, $3)",
+      [20, 101, past]
+    );
+    await database.execute(
+      "INSERT INTO attempts(assessment_id, student_id, expires_at) VALUES($1, $2, $3)",
+      [21, 102, future]
+    );
+    await database.execute(
+      "INSERT INTO attempts(assessment_id, student_id, expires_at, submitted_at, status) VALUES($1, $2, $3, $4, $5)",
+      [22, 101, past, past, "PASS"]
+    );
+    assert.equal(await repository.expireOverdueAttempts(), 1);
+    const overdue = await database.one("SELECT * FROM attempts WHERE assessment_id = $1 AND student_id = $2", [20, 101]);
+    const active = await database.one("SELECT * FROM attempts WHERE assessment_id = $1 AND student_id = $2", [21, 102]);
+    const completed = await database.one("SELECT * FROM attempts WHERE assessment_id = $1 AND student_id = $2", [22, 101]);
+    assert.equal(overdue.status, "FAIL");
+    assert.equal(overdue.score, 0);
+    assert.equal(overdue.submitted_at, past);
+    assert.equal(active.submitted_at, null);
+    assert.equal(completed.status, "PASS");
+  } finally { await database.close(); }
+});
+
+test("resuming an active attempt never extends its original deadline", async () => {
+  const { database, repository } = setup();
+  try {
+    const started = await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    const originalDeadline = started.attempt.expires_at;
+    const resumed = await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    assert.equal(resumed.attempt.expires_at, originalDeadline);
+  } finally { await database.close(); }
+});
+
+test("answers autosave only for the enrolled student while the attempt is active", async () => {
+  const { database, repository } = setup();
+  try {
+    await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    const saved = await repository.saveAttemptAnswers({
+      userId: 101, institutionId: "school-a", assessmentId: 20, answers: { 0: 0, 1: 1, 99: 1, 1.5: 0, 0: 99 }
+    });
+    assert.equal(saved.ok, true);
+    const row = await database.one("SELECT answers_json FROM attempts WHERE assessment_id = $1 AND student_id = $2", [20, 101]);
+    assert.deepEqual(JSON.parse(row.answers_json), { 1: 1 });
+    await assert.rejects(
+      repository.saveAttemptAnswers({ userId: 102, institutionId: "school-a", assessmentId: 20, answers: { 0: 0 } }),
+      error => error.status === 400
+    );
+  } finally { await database.close(); }
+});
+
+test("timed-out attempts are graded from the last server-saved answers, not late client answers", async () => {
+  const { database, repository } = setup();
+  try {
+    const started = await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    await repository.saveAttemptAnswers({
+      userId: 101, institutionId: "school-a", assessmentId: 20, answers: { 0: 0, 1: 1 }
+    });
+    const past = new Date(Date.now() - 60_000).toISOString();
+    await database.execute("UPDATE attempts SET expires_at = $1 WHERE id = $2", [past, started.attempt.id]);
+    const result = await repository.submitAttempt({
+      userId: 101, institutionId: "school-a", assessmentId: 20, answers: { 0: 0, 1: 0 }
+    });
+    assert.equal(result.timed_out, true);
+    assert.equal(result.score, 1);
+    assert.equal(result.percentage, 50);
+    assert.deepEqual(JSON.parse(result.answers_json), { 0: 0, 1: 1 });
+  } finally { await database.close(); }
+});
+
+test("expiry sweep grades autosaved answers instead of discarding them", async () => {
+  const { database, repository } = setup();
+  try {
+    const started = await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    await repository.saveAttemptAnswers({
+      userId: 101, institutionId: "school-a", assessmentId: 20, answers: { 0: 0, 1: 1 }
+    });
+    const past = new Date(Date.now() - 60_000).toISOString();
+    await database.execute("UPDATE attempts SET expires_at = $1 WHERE id = $2", [past, started.attempt.id]);
+    assert.equal(await repository.expireOverdueAttempts(), 1);
+    const result = await database.one("SELECT * FROM attempts WHERE id = $1", [started.attempt.id]);
+    assert.equal(result.score, 1);
+    assert.equal(result.percentage, 50);
+    assert.equal(result.status, "PASS");
+    assert.equal(result.submitted_at, past);
+  } finally { await database.close(); }
+});
+

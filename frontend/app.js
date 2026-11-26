@@ -53,7 +53,38 @@ async function assessments(){const a=await api("/assessments");$("#view").innerH
 let qCount=0;
 async function newAssessment(){const cs=await api("/classes");qCount=0;$("#modal").innerHTML=`<div><h2>Assessment builder</h2><form id="af"><div class="formgrid"><label>Title<input name="title" required></label><label>Type<select name="type"><option>quiz</option><option>exam</option></select></label><label>Class<select name="class_id">${cs.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></label><label>Duration (minutes)<input name="duration_minutes" type="number" value="20"></label><label>Pass mark %<input name="pass_mark" type="number" value="50"></label></div><div id="qs"></div><button type="button" class="btn secondary" onclick="addQ()">+ Add question</button> <button class="btn">Publish</button> <button type="button" class="btn secondary" onclick="closeModal()">Cancel</button></form></div>`;$("#modal").classList.add("open");addQ();$("#af").onsubmit=async e=>{e.preventDefault();const qs=$$(".qrow").map((r,i)=>({question:r.querySelector("[name=q]").value,options:[...r.querySelectorAll("[name=o]")].map(x=>x.value),answer:Number(r.querySelector("[name=answer]").value)}));const o=Object.fromEntries(new FormData(e));o.questions=qs;await api("/assessments",{method:"POST",body:JSON.stringify(o)});closeModal();show("assessments")}}
 function addQ(){qCount++;const d=document.createElement("div");d.className="qrow";d.innerHTML=`<div class="qtop"><b>Question ${qCount}</b><button type="button" class="btn secondary" onclick="this.closest('.qrow').remove()">Remove</button></div><label>Question<input name="q" required></label>${[0,1,2,3].map(i=>`<label>Option ${i+1}<input name="o" required></label>`).join("")}<label>Correct option<select name="answer"><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option></select></label>`;$("#qs").appendChild(d)}
-async function takeAssessment(id){const d=await api("/assessments/"+id+"/start",{method:"POST",body:"{}"});const at=d.attempt,qs=d.questions;let answers={};let left=Math.max(0,Math.floor((new Date(at.expires_at)-Date.now())/1000));const render=()=>{if(left<=0)return finish();$("#modal").innerHTML=`<div><div class="bar"><h2>Assessment</h2><b id="timer">${fmt(left)}</b></div>${qs.map((q,i)=>`<div class="qrow"><b>${i+1}. ${esc(q.question)}</b>${q.options.map((o,j)=>`<label style="font-weight:500"><input type="radio" name="q${i}" value="${j}" ${String(answers[i])===String(j)?"checked":""}> ${esc(o)}</label>`).join("")}</div>`).join("")}<button class="btn" id="finish">Submit assessment</button></div>`;$("#modal").classList.add("open");qs.forEach((q,i)=>$$(`input[name=q${i}]`).forEach(x=>x.onchange=()=>answers[i]=Number(x.value)));$("#finish").onclick=finish};const fmt=n=>`${Math.floor(n/60)}:${String(n%60).padStart(2,"0")}`;const finish=async()=>{clearInterval(window.mcTimer);const r=await api("/assessments/"+id+"/submit",{method:"POST",body:JSON.stringify({answers})});$("#modal").innerHTML=`<div><h2>Result</h2><p class="pill">${r.status}</p><h1>${r.percentage}%</h1><p>Score: ${r.score}</p><button class="btn" onclick="closeModal();show('performance')">Continue</button></div>`};render();clearInterval(window.mcTimer);window.mcTimer=setInterval(()=>{left--;if($("#timer"))$("#timer").textContent=fmt(left);if(left<=0)finish()},1000)}
+async function takeAssessment(id){
+ let d;
+ try{d=await api("/assessments/"+id+"/start",{method:"POST",body:"{}"})}
+ catch(error){toast(error.message);return}
+ const at=d.attempt,qs=d.questions,deadline=Date.parse(at.expires_at);
+ if(!Number.isFinite(deadline)){toast("This assessment has an invalid deadline. Contact your school.");return}
+ let answers={},finishing=false,saveQueue=Promise.resolve();
+ const remaining=()=>Math.max(0,Math.ceil((deadline-Date.now())/1000));
+ const fmt=n=>`${Math.floor(n/60)}:${String(n%60).padStart(2,"0")}`;
+ const render=()=>{
+   if(remaining()<=0)return finish();
+   $("#modal").innerHTML=`<div><div class="bar"><h2>Assessment</h2><b id="timer">${fmt(remaining())}</b></div>${qs.map((q,i)=>`<div class="qrow"><b>${i+1}. ${esc(q.question)}</b>${q.options.map((o,j)=>`<label style="font-weight:500"><input type="radio" name="q${i}" value="${j}" ${String(answers[i])===String(j)?"checked":""}> ${esc(o)}</label>`).join("")}</div>`).join("")}<button class="btn" id="finish">Submit assessment</button></div>`;
+   $("#modal").classList.add("open");
+   qs.forEach((q,i)=>$$(`input[name=q${i}]`).forEach(x=>x.onchange=()=>{answers[i]=Number(x.value);saveQueue=saveQueue.then(()=>api("/assessments/"+id+"/answers",{method:"PATCH",body:JSON.stringify({answers})})).catch(error=>{toast(error.message)});}));
+   $("#finish").onclick=finish;
+ };
+ const finish=async()=>{
+   if(finishing)return;
+   finishing=true;clearInterval(window.mcTimer);
+   try{
+     await saveQueue;
+     const r=await api("/assessments/"+id+"/submit",{method:"POST",body:JSON.stringify({answers})});
+     const heading=r.timed_out?"Time expired — attempt closed":"Result";
+     $("#modal").innerHTML=`<div><h2>${heading}</h2><p class="pill">${esc(r.status)}</p><h1>${Number(r.percentage)||0}%</h1><p>Score: ${Number(r.score)||0}</p><button class="btn" onclick="closeModal();show('performance')">Continue</button></div>`;
+   }catch(error){
+     finishing=false;toast(error.message);
+     if(remaining()<=0)$("#modal").innerHTML=`<div><h2>Time expired</h2><p>Your answers could not be confirmed by the server. Please reconnect and submit to retrieve the final attempt status.</p><button class="btn" onclick="takeAssessment(${id})">Check attempt status</button></div>`;
+   }
+ };
+ render();clearInterval(window.mcTimer);
+ window.mcTimer=setInterval(()=>{const left=remaining();if($("#timer"))$("#timer").textContent=fmt(left);if(left<=0)finish()},500);
+}
 async function attendance(){const cs=await api("/classes");if(state.user.role==="student")return $("#view").innerHTML=`<div class="cards">${cs.map(c=>`<div class=card><h3>${esc(c.name)}</h3><button class="btn secondary" onclick="attendanceSummary(${c.id})">View attendance</button></div>`).join("")}</div>`;$("#view").innerHTML=`<div class="toolbar"><select id="aclass">${cs.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select><input id="adate" type="date" value="${new Date().toISOString().slice(0,10)}"><button class="btn" onclick="loadAttendance()">Load</button></div><div id="att"></div>`;await loadAttendance()}
 async function loadAttendance(){const id=$("#aclass").value,d=await api("/attendance/"+id+"?date="+$("#adate").value);$("#att").innerHTML=`<div class=card><div class=tablewrap><table class=table><thead><tr><th>Student</th><th>Status</th></tr></thead><tbody>${d.students.map(s=>`<tr><td>${esc(s.name)}</td><td><select onchange="saveAtt(${id},${s.id},this.value)"><option ${s.status==="present"?"selected":""}>present</option><option ${s.status==="absent"?"selected":""}>absent</option><option ${s.status==="late"?"selected":""}>late</option></select></td></tr>`).join("")}</tbody></table></div></div>`}
 async function saveAtt(c,s,status){await api("/attendance",{method:"POST",body:JSON.stringify({class_id:c,student_id:s,date:$("#adate").value,status})});toast("Attendance saved")}
