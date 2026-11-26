@@ -61,8 +61,8 @@ test("settings repository updates only the requested institution atomically", as
         PRIMARY KEY (institution_id, key)
       );
       INSERT INTO institution_settings(institution_id, key, value) VALUES
-        ("school-a", "school_name", "Old A"),
-        ("school-b", "school_name", "School B");
+        ('school-a', 'school_name', 'Old A'),
+        ('school-b', 'school_name', 'School B');
     `);
     const repository = createSettingsRepository(database);
     assert.deepEqual(await repository.updateForInstitution("school-a", {
