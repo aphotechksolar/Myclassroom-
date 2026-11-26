@@ -6,11 +6,15 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const Database = require("better-sqlite3");
 const multer = require("multer");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
+const SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === "production" ? "" : "myclassroom-local-development-only");
+if (!SECRET) throw new Error("JWT_SECRET must be set to a strong random value in production.");
+if (process.env.NODE_ENV === "production" && SECRET.length < 32) throw new Error("JWT_SECRET must be at least 32 characters in production.");
 const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, "..", "frontend");
 const DATA = path.join(ROOT, "data");
@@ -18,8 +22,18 @@ const UPLOADS = path.join(ROOT, "uploads");
 fs.mkdirSync(DATA, {recursive:true});
 fs.mkdirSync(UPLOADS, {recursive:true});
 
-app.use(cors());
+const allowedOrigins = (process.env.CORS_ORIGINS || "").split(",").map(x => x.trim()).filter(Boolean);
+const corsOptions = { origin(origin, callback) {
+  if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+  if (process.env.NODE_ENV !== "production" && /^https?:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(origin)) return callback(null, true);
+  return callback(new Error("Origin not allowed by CORS"));
+}};
+app.disable("x-powered-by");
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(cors(corsOptions));
 app.use(express.json({limit:"2mb"}));
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: "Too many authentication attempts. Please try again later." } });
+app.use("/api/auth", authLimiter);
 app.use("/uploads", express.static(UPLOADS));
 
 const db = new Database(path.join(DATA, "myclassroom.db"));
@@ -123,7 +137,17 @@ CREATE TABLE IF NOT EXISTS audit_log(
 `);
 
 const count = db.prepare("SELECT COUNT(*) c FROM users").get().c;
-if (!count) {
+if (!count && process.env.NODE_ENV === "production") {
+  const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || "").trim().toLowerCase();
+  const password = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || "");
+  const name = String(process.env.BOOTSTRAP_ADMIN_NAME || "Platform Administrator").trim();
+  if (!email || password.length < 10 || password.length > 128) {
+    throw new Error("For a new production database, set BOOTSTRAP_ADMIN_EMAIL and a BOOTSTRAP_ADMIN_PASSWORD of 10-128 characters.");
+  }
+  db.prepare("INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,'admin')").run(name,email,bcrypt.hashSync(password,10));
+  db.prepare("INSERT INTO school_settings(key,value) VALUES('school_name',?)").run(process.env.SCHOOL_NAME || "MyClassroom Academy");
+}
+if (!count && process.env.NODE_ENV !== "production" && process.env.SEED_DEMO_DATA !== "false") {
   const ins = db.prepare("INSERT INTO users(name,email,password_hash,role,phone,bio) VALUES(?,?,?,?,?,?)");
   const admin = ins.run("School Administrator","admin@example.com",bcrypt.hashSync("admin123",10),"admin","","");
   const teacher = ins.run("Demo Teacher","teacher@example.com",bcrypt.hashSync("teacher123",10),"teacher","","Science teacher");
@@ -164,23 +188,27 @@ function normalizeQuestions(raw){
 app.post("/api/auth/register",(req,res)=>{
   const {name,email,password,role="student"}=req.body;
   if(!name||!email||!password) return res.status(400).json({error:"Name, email and password are required"});
+  if(String(password).length < 10 || String(password).length > 128) return res.status(400).json({error:"Password must be between 10 and 128 characters"});
+  if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(email).trim())) return res.status(400).json({error:"Enter a valid email address"});
   const safeRole=role==="teacher"?"teacher":"student";
   try{
     const r=db.prepare("INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,?)")
-      .run(name,email.toLowerCase(),bcrypt.hashSync(password,10),safeRole);
+      .run(String(name).trim(),String(email).trim().toLowerCase(),bcrypt.hashSync(password,10),safeRole);
     const u=db.prepare("SELECT id,name,email,role,phone,bio,created_at FROM users WHERE id=?").get(r.lastInsertRowid);
     res.json({user:u,token:sign(u)});
   }catch(e){res.status(400).json({error:"Email already exists"});}
 });
 app.post("/api/auth/login",(req,res)=>{
-  const u=db.prepare("SELECT * FROM users WHERE email=?").get(String(req.body.email||"").toLowerCase());
+  const u=db.prepare("SELECT * FROM users WHERE email=?").get(String(req.body.email||"").trim().toLowerCase());
   if(!u||!bcrypt.compareSync(req.body.password||"",u.password_hash)) return res.status(401).json({error:"Invalid email or password"});
   res.json({user:{id:u.id,name:u.name,email:u.email,role:u.role,phone:u.phone,bio:u.bio},token:sign(u)});
 });
 app.post("/api/auth/change-password",auth,(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE id=?").get(req.user.id);
   if(!u||!bcrypt.compareSync(req.body.currentPassword||"",u.password_hash)) return res.status(400).json({error:"Current password is incorrect"});
-  db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(bcrypt.hashSync(req.body.newPassword||"",10),u.id);
+  const nextPassword=String(req.body.newPassword||"");
+  if(nextPassword.length < 10 || nextPassword.length > 128) return res.status(400).json({error:"New password must be between 10 and 128 characters"});
+  db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(bcrypt.hashSync(nextPassword,10),u.id);
   log(u.id,"Changed password"); res.json({ok:true});
 });
 app.post("/api/auth/request-reset",(req,res)=>{
@@ -190,13 +218,17 @@ app.post("/api/auth/request-reset",(req,res)=>{
   const hash=crypto.createHash("sha256").update(token).digest("hex");
   const expires=new Date(Date.now()+30*60*1000).toISOString();
   db.prepare("INSERT INTO reset_tokens(user_id,token_hash,expires_at) VALUES(?,?,?)").run(u.id,hash,expires);
-  res.json({ok:true,message:"Reset token created. Connect this endpoint to your email provider in production.",dev_token:token});
+  // Email delivery is intentionally not simulated or exposed in the API response.
+  // Connect a verified email provider before enabling customer-facing password recovery.
+  res.json({ok:true,message:"Password recovery is not configured yet. Please contact your school administrator."});
 });
 app.post("/api/auth/reset",(req,res)=>{
   const crypto=require("crypto"), hash=crypto.createHash("sha256").update(req.body.token||"").digest("hex");
   const row=db.prepare("SELECT * FROM reset_tokens WHERE token_hash=? AND used=0 AND expires_at>?").get(hash,new Date().toISOString());
   if(!row) return res.status(400).json({error:"Invalid or expired reset token"});
-  db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(bcrypt.hashSync(req.body.newPassword||"",10),row.user_id);
+  const nextPassword=String(req.body.newPassword||"");
+  if(nextPassword.length < 10 || nextPassword.length > 128) return res.status(400).json({error:"New password must be between 10 and 128 characters"});
+  db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(bcrypt.hashSync(nextPassword,10),row.user_id);
   db.prepare("UPDATE reset_tokens SET used=1 WHERE id=?").run(row.id); res.json({ok:true});
 });
 app.get("/api/me",auth,(req,res)=>res.json(db.prepare("SELECT id,name,email,role,phone,bio,created_at FROM users WHERE id=?").get(req.user.id)));
