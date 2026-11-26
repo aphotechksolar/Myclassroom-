@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "node server.js",
     "migrate:tenant": "node migrations/001_multi_tenant_foundation.js",
-    "migrate:settings": "node migrations/002_institution_settings.js"
+    "migrate:settings": "node migrations/002_institution_settings.js",
+    "migrate:all": "node migrations/001_multi_tenant_foundation.js && node migrations/002_institution_settings.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
