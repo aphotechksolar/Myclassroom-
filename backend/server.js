@@ -17,6 +17,7 @@ const { createTimetableRepository } = require("./repositories/timetable");
 const { createPeopleRepository } = require("./repositories/people");
 const { createAttendanceRepository } = require("./repositories/attendance");
 const { createGradebookRepository } = require("./repositories/gradebook");
+const { createPerformanceRepository } = require("./repositories/performance");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const { validateMaterialUpload } = require("./uploads/validation");
@@ -101,6 +102,7 @@ const timetableRepository = createTimetableRepository(asyncDb);
 const peopleRepository = createPeopleRepository(asyncDb);
 const attendanceRepository = createAttendanceRepository(asyncDb);
 const gradebookRepository = createGradebookRepository(asyncDb);
+const performanceRepository = createPerformanceRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -817,7 +819,19 @@ app.get("/api/gradebook",auth,roles("admin","teacher"),async(req,res,next)=>{
     next(error);
   }
 });
-app.get("/api/performance",auth,(req,res)=>{const studentId=req.user.institution_role==="student"?req.user.id:Number(req.query.student_id||0);if(!studentId)return res.status(400).json({error:"student_id required"});const user=db.prepare("SELECT u.id,u.name,u.email FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE u.id=? AND u.role='student' AND m.institution_id=? AND m.status='active'").get(studentId,req.user.institution_id);if(!user)return res.status(404).json({error:"Student not found in this school"});if(req.user.institution_role==="teacher"&&!db.prepare("SELECT 1 FROM enrollments e JOIN classes c ON c.id=e.class_id WHERE e.student_id=? AND c.teacher_id=? AND c.institution_id=?").get(studentId,req.user.id,req.user.institution_id))return res.status(403).json({error:"Not allowed"});const results=db.prepare("SELECT a.title,a.type,at.percentage,at.status,at.submitted_at FROM attempts at JOIN assessments a ON a.id=at.assessment_id JOIN classes c ON c.id=a.class_id WHERE at.student_id=? AND c.institution_id=? AND at.status='submitted' ORDER BY at.id").all(studentId,req.user.institution_id);const attendance=db.prepare("SELECT att.status,COUNT(*) c FROM attendance att JOIN classes c ON c.id=att.class_id WHERE att.student_id=? AND c.institution_id=? GROUP BY att.status").all(studentId,req.user.institution_id);res.json({student:user,results,attendance});});
+app.get("/api/performance",auth,async(req,res,next)=>{
+  const role=req.user.institution_role;
+  const studentId=role==="student"?req.user.id:Number(req.query.student_id||0);
+  try {
+    const result=await performanceRepository.getForUser(req.user.id,req.user.institution_id,role,studentId);
+    if(!result) return res.status(404).json({error:"Student not found in this school"});
+    res.json(result);
+  } catch(error) {
+    if(error.status===403) return res.status(403).json({error:error.message});
+    if(error instanceof TypeError) return res.status(400).json({error:error.message});
+    next(error);
+  }
+});
 app.get("/api/rankings/:classId",auth,(req,res)=>{if(!classForUser(req.user,req.params.classId))return res.status(403).json({error:"Not allowed"});const rows=db.prepare(`SELECT u.id,u.name,ROUND(COALESCE(AVG(at.percentage),0),1) average FROM users u JOIN enrollments e ON e.student_id=u.id LEFT JOIN attempts at ON at.student_id=u.id AND at.status='submitted' LEFT JOIN assessments a ON a.id=at.assessment_id AND a.class_id=e.class_id WHERE e.class_id=? GROUP BY u.id ORDER BY average DESC,u.name`).all(req.params.classId);res.json(rows.map((x,i)=>({...x,rank:i+1})));});
 app.get("/api/export/gradebook.csv",auth,roles("admin","teacher"),(req,res)=>{
   const base=`SELECT u.name student,c.name class_name,COALESCE(ROUND(AVG(at.percentage),1),0) assessment_average
