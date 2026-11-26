@@ -65,3 +65,47 @@ test("messages repository rejects invalid authenticated scope", async () => {
     await database.close();
   }
 });
+
+
+test("only the intended receiver can mark a message read within its institution", async () => {
+  const sqlite = createDatabase(":memory:");
+  const database = openAsyncSqliteDatabase(sqlite);
+  try {
+    sqlite.exec(`
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY,
+        sender_id INTEGER NOT NULL,
+        receiver_id INTEGER NOT NULL,
+        body TEXT NOT NULL,
+        read_at TEXT,
+        institution_id TEXT NOT NULL
+      );
+      INSERT INTO messages VALUES
+        (1, 12, 11, 'School A message', NULL, 'school-a'),
+        (2, 12, 21, 'School B message', NULL, 'school-b');
+    `);
+
+    const repository = createMessagesRepository(database);
+    await repository.markRead(1, 11, "school-a");
+    assert.ok(sqlite.prepare("SELECT read_at FROM messages WHERE id = 1").get().read_at);
+
+    await repository.markRead(1, 12, "school-a");
+    await repository.markRead(2, 11, "school-a");
+    assert.equal(sqlite.prepare("SELECT read_at FROM messages WHERE id = 2").get().read_at, null);
+  } finally {
+    await database.close();
+  }
+});
+
+test("message read receipt rejects invalid identifiers and institution scope", async () => {
+  const sqlite = createDatabase(":memory:");
+  const database = openAsyncSqliteDatabase(sqlite);
+  try {
+    const repository = createMessagesRepository(database);
+    await assert.rejects(repository.markRead("bad", 11, "school-a"), /valid user ID/);
+    await assert.rejects(repository.markRead(1, 0, "school-a"), /valid user ID/);
+    await assert.rejects(repository.markRead(1, 11, ""), /valid institution ID/);
+  } finally {
+    await database.close();
+  }
+});
