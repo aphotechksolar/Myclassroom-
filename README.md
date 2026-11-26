@@ -22,11 +22,6 @@ A more complete full-stack starter for an online classroom and school-management
 - Admin school settings and audit log
 - Responsive mobile-first interface
 
-## Demo accounts
-Admin: admin@example.com / admin123
-Teacher: teacher@example.com / teacher123
-Student: student@example.com / student123
-
 ## Run
 1. Install Node.js 18+.
 2. Open a terminal in `backend`.
@@ -40,6 +35,20 @@ The backend serves the frontend, so one server is enough for local development.
 ## Important production notes
 This is a deployable starter, not a hosted service. For production use HTTPS, PostgreSQL, a strong secret, secure HTTP-only cookie authentication, rate limiting, validation, backups, email delivery for password recovery, object storage/CDN for uploads, malware scanning, logging/monitoring and a real video provider such as Zoom, Google Meet, Microsoft Teams, Jitsi or WebRTC infrastructure.
 
-Local uploads are intended for development. The password reset API creates a token but does not send email unless an email provider is wired in.
+Local uploads are intended for development. Password recovery email delivery is not configured; users must contact their school administrator.
 
 The report card is print-ready HTML and can be saved as PDF from the browser print dialog.
+
+## Multi-school foundation migration (development only)
+
+The first tenant data-model migration is available as an explicit command:
+
+```bash
+cd backend
+npm install
+npm run migrate:tenant
+```
+
+It creates the institution and institution-membership tables, adds institution references to existing class, announcement, audit and settings records, and assigns the current single-school data to a `legacy-school` institution. The migration is idempotent and records its version in `schema_migrations`.
+
+**Do not treat this migration as enabling multi-school production use.** The existing API routes have not yet been changed to enforce institution scope. Do not onboard a second school or expose real school data to another institution until tenant-aware authentication, query scoping, file access controls, and cross-institution isolation tests are implemented and reviewed. Back up the SQLite database before running this migration on any database containing data.
