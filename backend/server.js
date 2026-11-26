@@ -845,19 +845,20 @@ app.get("/api/rankings/:classId",auth,async(req,res,next)=>{
     next(error);
   }
 });
-app.get("/api/export/gradebook.csv",auth,roles("admin","teacher"),(req,res)=>{
-  const base=`SELECT u.name student,c.name class_name,COALESCE(ROUND(AVG(at.percentage),1),0) assessment_average
-    FROM users u JOIN enrollments e ON e.student_id=u.id JOIN classes c ON c.id=e.class_id
-    JOIN institution_memberships m ON m.user_id=u.id AND m.institution_id=? AND m.status='active'
-    LEFT JOIN assessments a ON a.class_id=c.id
-    LEFT JOIN attempts at ON at.assessment_id=a.id AND at.student_id=u.id AND at.status='submitted'
-    WHERE c.institution_id=?`;
-  const rows=req.user.institution_role==="teacher"
-    ?db.prepare(base+" AND c.teacher_id=? GROUP BY u.id,c.id").all(req.user.institution_id,req.user.institution_id,req.user.id)
-    :db.prepare(base+" GROUP BY u.id,c.id").all(req.user.institution_id,req.user.institution_id);
-  const esc=v=>`"${String(v??"").replace(/"/g,'""')}"`;
-  const csv=["Student,Class,Assessment Average",...rows.map(r=>[r.student,r.class_name,r.assessment_average].map(esc).join(","))].join("\n");
-  res.type("text/csv").send(csv);
+app.get("/api/export/gradebook.csv",auth,roles("admin","teacher"),async(req,res,next)=>{
+  try {
+    const rows=await gradebookRepository.listForUser(
+      req.user.id,req.user.institution_id,req.user.institution_role
+    );
+    const esc=value=>"\""+String(value??"").replace(/"/g,'""')+"\"";
+    const csv=["Student,Class,Assessment Average",...rows.map(row=>[
+      row.student_name,row.class_name,row.assessment_average??0
+    ].map(esc).join(","))].join("\n");
+    res.type("text/csv").send(csv);
+  } catch(error) {
+    if(error instanceof TypeError) return res.status(400).json({error:error.message});
+    next(error);
+  }
 });
 
 app.post("/api/attendance",auth,roles("admin","teacher"),async(req,res,next)=>{
