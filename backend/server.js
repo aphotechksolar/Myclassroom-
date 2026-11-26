@@ -272,7 +272,7 @@ function normalizeQuestions(raw){
 
 // Platform-owner operations use a separate high-entropy secret. This is an
 // operational bootstrap API; never expose the secret in browser-side code.
-db.exec(\`
+db.exec(`
 CREATE TABLE IF NOT EXISTS platform_audit_log(
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  action TEXT NOT NULL,
@@ -280,7 +280,7 @@ CREATE TABLE IF NOT EXISTS platform_audit_log(
  details TEXT DEFAULT '',
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-\`);
+`);
 function platformOwner(req,res,next){
  const expected=String(process.env.PLATFORM_OWNER_KEY||"");
  const supplied=String(req.get("x-platform-owner-key")||"");
@@ -292,9 +292,9 @@ function platformOwner(req,res,next){
 const platformLimiter=rateLimit({windowMs:15*60*1000,max:30,standardHeaders:true,legacyHeaders:false});
 app.use("/api/platform",platformLimiter);
 app.get("/api/platform/institutions",platformOwner,(req,res)=>{
- const rows=db.prepare(\`SELECT i.id,i.name,i.slug,i.institution_type,i.country_code,i.timezone,i.currency_code,i.status,i.created_at,
+ const rows=db.prepare(`SELECT i.id,i.name,i.slug,i.institution_type,i.country_code,i.timezone,i.currency_code,i.status,i.created_at,
  (SELECT COUNT(*) FROM institution_memberships m WHERE m.institution_id=i.id AND m.status='active') active_members
- FROM institutions i ORDER BY i.created_at DESC\`).all();
+ FROM institutions i ORDER BY i.created_at DESC`).all();
  res.json(rows);
 });
 app.post("/api/platform/institutions",platformOwner,(req,res)=>{
