@@ -8,7 +8,7 @@ function setup() {
   const sqlite = createDatabase(":memory:");
   const database = openAsyncSqliteDatabase(sqlite);
   sqlite.exec(`
-    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);
     CREATE TABLE classes (
       id INTEGER PRIMARY KEY, name TEXT, teacher_id INTEGER, institution_id TEXT
     );
