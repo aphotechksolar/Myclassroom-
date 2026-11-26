@@ -619,6 +619,7 @@ app.get("/api/dashboard",auth,(req,res)=>{
   }});
 });
 
+app.get("/platform-owner",(req,res)=>res.sendFile(path.join(PUBLIC,"platform-owner.html")));
 app.get("/api/health",(req,res)=>res.json({ok:true,version:"12.0.0"}));
 app.use(express.static(PUBLIC));
 app.get("*",(req,res)=>res.sendFile(path.join(PUBLIC,"index.html")));
