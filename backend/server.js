@@ -992,23 +992,16 @@ app.get("/api/guardian/children",auth,async(req,res,next)=>{
     next(error);
   }
 });
-app.get("/api/guardian/children/:id/performance",auth,(req,res)=>{
+app.get("/api/guardian/children/:id/performance",auth,async(req,res,next)=>{
   if(req.user.institution_role!=="parent") return res.status(403).json({error:"Parent access required."});
-  const studentId=Number(req.params.id);
-  const link=db.prepare("SELECT 1 FROM guardian_student_links WHERE institution_id=? AND guardian_id=? AND student_id=? AND status='verified'").get(req.user.institution_id,req.user.id,studentId);
-  if(!link) return res.status(404).json({error:"Verified child not found."});
-  const student=db.prepare("SELECT id,name FROM users WHERE id=?").get(studentId);
-  const results=db.prepare(`SELECT a.title,a.type,at.percentage,at.status,at.submitted_at
-    FROM attempts at JOIN assessments a ON a.id=at.assessment_id JOIN classes c ON c.id=a.class_id
-    WHERE at.student_id=? AND c.institution_id=? AND at.status IN ('submitted','expired') ORDER BY at.id DESC LIMIT 100`).all(studentId,req.user.institution_id);
-  const attendance=db.prepare(`SELECT att.status,COUNT(*) count FROM attendance att JOIN classes c ON c.id=att.class_id
-    WHERE att.student_id=? AND c.institution_id=? GROUP BY att.status`).all(studentId,req.user.institution_id);
-  const assignments=db.prepare(`SELECT a.title,a.due_date,s.score,s.feedback,s.submitted_at
-    FROM assignments a JOIN classes c ON c.id=a.class_id
-    LEFT JOIN submissions s ON s.assignment_id=a.id AND s.student_id=?
-    JOIN enrollments e ON e.class_id=c.id AND e.student_id=?
-    WHERE c.institution_id=? ORDER BY a.due_date DESC LIMIT 100`).all(studentId,studentId,req.user.institution_id);
-  res.json({student,results,attendance,assignments});
+  try {
+    const performance=await guardianRepository.getChildPerformance(req.user.id,req.user.institution_id,req.params.id);
+    if(!performance) return res.status(404).json({error:"Verified child not found."});
+    res.json(performance);
+  } catch(error) {
+    if(error instanceof TypeError) return res.status(400).json({error:error.message});
+    next(error);
+  }
 });
 app.delete("/api/guardians/children/:id",auth,roles("admin"),(req,res)=>{
   const studentId=Number(req.params.id);
