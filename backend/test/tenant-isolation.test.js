@@ -11,6 +11,8 @@ let server;
 let baseUrl;
 let dataDir;
 let uploadDir;
+const sessionCookies = new Map();
+const csrfTokens = new Map();
 
 async function unusedPort() {
   return new Promise((resolve, reject) => {
@@ -26,7 +28,10 @@ async function unusedPort() {
 async function request(route, { method = "GET", body, token, platform = false } = {}) {
   const headers = {};
   if (body !== undefined) headers["content-type"] = "application/json";
-  if (token) headers.authorization = `Bearer ${token}`;
+  if (token && sessionCookies.has(token)) headers.cookie = sessionCookies.get(token);
+  if (token && csrfTokens.has(token) && !["GET","HEAD","OPTIONS"].includes(method.toUpperCase())) {
+    headers["x-csrf-token"] = csrfTokens.get(token);
+  }
   if (platform) headers["x-platform-owner-key"] = platformKey;
   const response = await fetch(`${baseUrl}${route}`, {
     method,
@@ -38,7 +43,12 @@ async function request(route, { method = "GET", body, token, platform = false } 
   if (text) {
     try { payload = JSON.parse(text); } catch { payload = text; }
   }
-  return { status: response.status, body: payload };
+  if (payload && payload.token && response.headers.get("set-cookie")) {
+    const cookie = response.headers.get("set-cookie").split(";")[0];
+    sessionCookies.set(payload.token, cookie);
+    csrfTokens.set(payload.token, payload.csrfToken);
+  }
+  return { status: response.status, body: payload, headers: response.headers };
 }
 
 async function createSchool({ name, slug, adminName, email }) {
