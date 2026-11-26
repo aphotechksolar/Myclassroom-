@@ -59,20 +59,21 @@ async function takeAssessment(id){
  catch(error){toast(error.message);return}
  const at=d.attempt,qs=d.questions,deadline=Date.parse(at.expires_at);
  if(!Number.isFinite(deadline)){toast("This assessment has an invalid deadline. Contact your school.");return}
- let answers={},finishing=false;
+ let answers={},finishing=false,saveQueue=Promise.resolve();
  const remaining=()=>Math.max(0,Math.ceil((deadline-Date.now())/1000));
  const fmt=n=>`${Math.floor(n/60)}:${String(n%60).padStart(2,"0")}`;
  const render=()=>{
    if(remaining()<=0)return finish();
    $("#modal").innerHTML=`<div><div class="bar"><h2>Assessment</h2><b id="timer">${fmt(remaining())}</b></div>${qs.map((q,i)=>`<div class="qrow"><b>${i+1}. ${esc(q.question)}</b>${q.options.map((o,j)=>`<label style="font-weight:500"><input type="radio" name="q${i}" value="${j}" ${String(answers[i])===String(j)?"checked":""}> ${esc(o)}</label>`).join("")}</div>`).join("")}<button class="btn" id="finish">Submit assessment</button></div>`;
    $("#modal").classList.add("open");
-   qs.forEach((q,i)=>$(`input[name=q${i}]`).forEach(x=>x.onchange=()=>answers[i]=Number(x.value)));
+   qs.forEach((q,i)=>$(`input[name=q${i}]`).forEach(x=>x.onchange=()=>{answers[i]=Number(x.value);saveQueue=saveQueue.then(()=>api("/assessments/"+id+"/answers",{method:"PATCH",body:JSON.stringify({answers})})).catch(error=>{toast(error.message)});}));
    $("#finish").onclick=finish;
  };
  const finish=async()=>{
    if(finishing)return;
    finishing=true;clearInterval(window.mcTimer);
    try{
+     await saveQueue;
      const r=await api("/assessments/"+id+"/submit",{method:"POST",body:JSON.stringify({answers})});
      const heading=r.timed_out?"Time expired — attempt closed":"Result";
      $("#modal").innerHTML=`<div><h2>${heading}</h2><p class="pill">${esc(r.status)}</p><h1>${Number(r.percentage)||0}%</h1><p>Score: ${Number(r.score)||0}</p><button class="btn" onclick="closeModal();show('performance')">Continue</button></div>`;
