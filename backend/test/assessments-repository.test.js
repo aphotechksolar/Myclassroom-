@@ -92,8 +92,7 @@ test("assessment creation validates questions and notifies only enrolled class m
       userId: 1, institutionId: "school-a", role: "teacher", classId: 10,
       title: "New Biology Quiz", type: "quiz", durationMinutes: 25, passMark: 60,
       questions: [
-        { question: "What is a cell?", options: ["Basic unit", "Organ"], answer: 0 },
-        { question: "Invalid question", options: ["Only one"], answer: 0 }
+        { question: "What is a cell?", options: ["Basic unit", "Organ"], answer: 0 }
       ]
     });
     assert.ok(created.id > 0);
@@ -142,8 +141,8 @@ test("assessment creation rejects invalid questions, class IDs and roles", async
       userId: 1, institutionId: "school-a", role: "teacher", classId: 10,
       title: "Invalid assessment"
     };
-    await assert.rejects(repository.createForClass({ ...base, questions: "not-an-array" }), /Questions must be an array/);
-    await assert.rejects(repository.createForClass({ ...base, questions: [{ question: "No options", options: [], answer: 0 }] }), /at least one valid question/);
+    await assert.rejects(repository.createForClass({ ...base, questions: "not-an-array" }), /between 1 and 100 questions/);
+    await assert.rejects(repository.createForClass({ ...base, questions: [{ question: "No options", options: [], answer: 0 }] }), /between 2 and 10 options/);
     await assert.rejects(repository.createForClass({ ...base, classId: 0, questions: [{ options: ["A", "B"], answer: 0 }] }), /valid class ID/);
     await assert.rejects(repository.createForClass({ ...base, role: "student", questions: [{ options: ["A", "B"], answer: 0 }] }), /Only school admins and teachers/);
   } finally {
@@ -345,3 +344,51 @@ test("expiry sweep grades autosaved answers instead of discarding them", async (
   } finally { await database.close(); }
 });
 
+
+
+test("assessment creation rejects invalid title, duration, pass mark and type", async () => {
+  const { database, repository } = setup();
+  try {
+    const base = {
+      userId: 1, institutionId: "school-a", role: "teacher", classId: 10,
+      title: "Valid exam", questions: [{ question: "Q", options: ["A", "B"], answer: 0 }]
+    };
+    for (const title of ["", "   ", "x".repeat(161)]) {
+      await assert.rejects(repository.createForClass({ ...base, title }), /Assessment title/);
+    }
+    for (const durationMinutes of [0, -1, 481, 1.5, "not-a-number"]) {
+      await assert.rejects(repository.createForClass({ ...base, durationMinutes }), /duration must be between/);
+    }
+    for (const passMark of [-1, 100.1, "not-a-number"]) {
+      await assert.rejects(repository.createForClass({ ...base, passMark }), /Pass mark must be between/);
+    }
+    await assert.rejects(repository.createForClass({ ...base, type: "homework" }), /type must be quiz or exam/);
+    const zeroPass = await repository.createForClass({ ...base, passMark: 0 });
+    const row = await database.one("SELECT pass_mark FROM assessments WHERE id = $1", [zeroPass.id]);
+    assert.equal(row.pass_mark, 0);
+  } finally { await database.close(); }
+});
+
+test("assessment creation rejects malformed or ambiguous questions instead of silently dropping them", async () => {
+  const { database, repository } = setup();
+  try {
+    const base = {
+      userId: 1, institutionId: "school-a", role: "teacher", classId: 10,
+      title: "Strict validation", questions: [{ question: "Q", options: ["A", "B"], answer: 0 }]
+    };
+    const invalidQuestions = [
+      [{ question: "", options: ["A", "B"], answer: 0 }],
+      [{ question: "Q", options: ["A"], answer: 0 }],
+      [{ question: "Q", options: ["A", "A"], answer: 0 }],
+      [{ question: "Q", options: ["A", "B"], answer: 2 }],
+      [{ question: "Q", options: ["A", "B"], answer: "0" }],
+      [{ question: "Q", options: ["A", "B"], answer: 0 }, { question: "Broken", options: [], answer: 0 }],
+      Array.from({ length: 101 }, () => ({ question: "Q", options: ["A", "B"], answer: 0 }))
+    ];
+    for (const questions of invalidQuestions) {
+      await assert.rejects(repository.createForClass({ ...base, questions }));
+    }
+    const count = await database.one("SELECT COUNT(*) AS count FROM assessments");
+    assert.equal(count.count, 3);
+  } finally { await database.close(); }
+});
