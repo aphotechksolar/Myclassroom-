@@ -18,6 +18,7 @@ const { createPeopleRepository } = require("./repositories/people");
 const { createAttendanceRepository } = require("./repositories/attendance");
 const { createGradebookRepository } = require("./repositories/gradebook");
 const { createPerformanceRepository } = require("./repositories/performance");
+const { createRankingsRepository } = require("./repositories/rankings");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const { validateMaterialUpload } = require("./uploads/validation");
@@ -103,6 +104,7 @@ const peopleRepository = createPeopleRepository(asyncDb);
 const attendanceRepository = createAttendanceRepository(asyncDb);
 const gradebookRepository = createGradebookRepository(asyncDb);
 const performanceRepository = createPerformanceRepository(asyncDb);
+const rankingsRepository = createRankingsRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -832,7 +834,17 @@ app.get("/api/performance",auth,async(req,res,next)=>{
     next(error);
   }
 });
-app.get("/api/rankings/:classId",auth,(req,res)=>{if(!classForUser(req.user,req.params.classId))return res.status(403).json({error:"Not allowed"});const rows=db.prepare(`SELECT u.id,u.name,ROUND(COALESCE(AVG(at.percentage),0),1) average FROM users u JOIN enrollments e ON e.student_id=u.id LEFT JOIN attempts at ON at.student_id=u.id AND at.status='submitted' LEFT JOIN assessments a ON a.id=at.assessment_id AND a.class_id=e.class_id WHERE e.class_id=? GROUP BY u.id ORDER BY average DESC,u.name`).all(req.params.classId);res.json(rows.map((x,i)=>({...x,rank:i+1})));});
+app.get("/api/rankings/:classId",auth,async(req,res,next)=>{
+  try {
+    const rows=await rankingsRepository.listForClass(req.user.id,req.user.institution_id,req.user.institution_role,req.params.classId);
+    if(rows===null) return res.status(403).json({error:"Not allowed"});
+    res.json(rows.map((row,index)=>({...row,rank:index+1})));
+  } catch(error) {
+    if(error.status===403) return res.status(403).json({error:error.message});
+    if(error instanceof TypeError) return res.status(400).json({error:error.message});
+    next(error);
+  }
+});
 app.get("/api/export/gradebook.csv",auth,roles("admin","teacher"),(req,res)=>{
   const base=`SELECT u.name student,c.name class_name,COALESCE(ROUND(AVG(at.percentage),1),0) assessment_average
     FROM users u JOIN enrollments e ON e.student_id=u.id JOIN classes c ON c.id=e.class_id
