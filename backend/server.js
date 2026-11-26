@@ -416,22 +416,23 @@ app.post("/api/auth/guardian/redeem",(req,res)=>{
     return res.status(400).json({error:"Provide a valid invitation, name, email and password (10-128 characters)."});
   }
   const tokenHash=require("crypto").createHash("sha256").update(token).digest("hex");
-  const invitation=db.prepare("SELECT * FROM guardian_invitations WHERE token_hash=? AND email=? AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP").get(tokenHash,email);
+  const invitation=db.prepare("SELECT * FROM guardian_invitations WHERE token_hash=? AND email=? AND used_at IS NULL AND julianday(expires_at)>julianday('now')").get(tokenHash,email);
   if(!invitation) return res.status(400).json({error:"Invitation is invalid, expired, already used or does not match this email."});
   try {
     const redeem=db.transaction(()=>{
+      const claimed=db.prepare("UPDATE guardian_invitations SET used_at=CURRENT_TIMESTAMP WHERE id=? AND used_at IS NULL AND julianday(expires_at)>julianday('now')").run(invitation.id);
+      if(claimed.changes!==1) throw new Error("This invitation has expired or has already been used.");
       let user=db.prepare("SELECT * FROM users WHERE email=?").get(email);
       if(!user) {
         const created=db.prepare("INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,'student')").run(name,email,bcrypt.hashSync(password,12));
         user=db.prepare("SELECT * FROM users WHERE id=?").get(created.lastInsertRowid);
-      } else if(!db.prepare("SELECT 1 FROM institution_memberships WHERE institution_id=? AND user_id=? AND role='parent'").get(invitation.institution_id,user.id)) {
-        throw new Error("This email already belongs to an account that is not a parent in this school. Contact the school.");
+      } else {
+        if(!bcrypt.compareSync(password,user.password_hash)) throw new Error("This email already has an account. Use its existing password to accept the invitation.");
       }
       const membership=db.prepare("SELECT role,status FROM institution_memberships WHERE institution_id=? AND user_id=?").get(invitation.institution_id,user.id);
       if(membership && (membership.role!=="parent" || membership.status!=="active")) throw new Error("This account already has a different or inactive role in this school.");
       db.prepare("INSERT OR IGNORE INTO institution_memberships(institution_id,user_id,role,status) VALUES(?,?,'parent','active')").run(invitation.institution_id,user.id);
       db.prepare("INSERT OR IGNORE INTO guardian_student_links(institution_id,guardian_id,student_id,status,verified_by) VALUES(?,?,?,'verified',?)").run(invitation.institution_id,user.id,invitation.student_id,invitation.created_by);
-      db.prepare("UPDATE guardian_invitations SET used_at=CURRENT_TIMESTAMP WHERE id=? AND used_at IS NULL").run(invitation.id);
       return user;
     });
     const user=redeem();
@@ -496,6 +497,21 @@ app.get("/api/admin/stats",auth,roles("admin"),(req,res)=>{
   res.json({users,students:db.prepare("SELECT COUNT(*) c FROM institution_memberships WHERE institution_id=? AND role='student' AND status='active'").get(id).c,teachers:db.prepare("SELECT COUNT(*) c FROM institution_memberships WHERE institution_id=? AND role='teacher' AND status='active'").get(id).c,classes:db.prepare("SELECT COUNT(*) c FROM classes WHERE institution_id=?").get(id).c,materials:count("materials"),assignments:count("assignments"),assessments:count("assessments")});
 });
 app.get("/api/admin/users",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT u.id,u.name,u.email,u.role,m.role institution_role,u.phone,u.bio,u.created_at FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE m.institution_id=? AND m.status='active' ORDER BY m.role,u.name").all(req.user.institution_id)));
+app.post("/api/admin/users",auth,roles("admin"),(req,res)=>{
+  const name=String(req.body.name||"").trim(),email=String(req.body.email||"").trim().toLowerCase();
+  const password=String(req.body.password||""),requestedRole=String(req.body.role||"student");
+  const role=requestedRole==="admin"?"school_admin":requestedRole;
+  if(name.length<2||name.length>120||! /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||password.length<10||password.length>128||!["student","teacher","school_admin"].includes(role))
+    return res.status(400).json({error:"Provide a valid name, email, password (10-128 characters) and role."});
+  try{
+    const create=db.transaction(()=>{
+      const userId=db.prepare("INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,?)").run(name,email,bcrypt.hashSync(password,12),role==="school_admin"?"admin":role).lastInsertRowid;
+      db.prepare("INSERT INTO institution_memberships(institution_id,user_id,role,status) VALUES(?,?,?,'active')").run(req.user.institution_id,userId,role);
+      return db.prepare("SELECT u.id,u.name,u.email,u.role,m.role institution_role,u.phone,u.bio,u.created_at FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE u.id=? AND m.institution_id=?").get(userId,req.user.institution_id);
+    });
+    const user=create();log(req.user.id,"Created school user",JSON.stringify({user_id:user.id,role}),req.user.institution_id);res.status(201).json(user);
+  }catch(e){if(String(e.message).includes("UNIQUE"))return res.status(409).json({error:"An account with this email already exists."});throw e;}
+});
 app.patch("/api/admin/users/:id",auth,roles("admin"),(req,res)=>{
   const role=["admin","teacher","student"].includes(req.body.role)?req.body.role:null;
   const u=db.prepare("SELECT u.* FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE u.id=? AND m.institution_id=? AND m.status='active'").get(req.params.id,req.user.institution_id);
@@ -756,6 +772,22 @@ app.post("/api/guardians/invitations",auth,roles("admin"),(req,res)=>{
     .run(req.user.institution_id,studentId,email,tokenHash,expiresAt,req.user.id);
   log(req.user.id,"Created guardian invitation",JSON.stringify({student_id:studentId,email}),req.user.institution_id);
   res.status(201).json({ok:true,invitation_token:rawToken,expires_at:expiresAt,delivery:"Share this one-time token privately with the verified guardian. It is not emailed automatically."});
+});
+app.get("/api/guardians/manage",auth,roles("admin"),(req,res)=>{
+  const invitations=db.prepare(`SELECT i.id,i.email,i.student_id,u.name student_name,i.expires_at,i.used_at,i.created_at,
+    CASE WHEN i.used_at IS NOT NULL THEN 'accepted' WHEN julianday(i.expires_at)<=julianday('now') THEN 'expired' ELSE 'pending' END status
+    FROM guardian_invitations i JOIN users u ON u.id=i.student_id
+    WHERE i.institution_id=? ORDER BY i.id DESC LIMIT 100`).all(req.user.institution_id);
+  const links=db.prepare(`SELECT l.guardian_id,l.student_id,g.name guardian_name,g.email guardian_email,s.name student_name,l.status,l.verified_at
+    FROM guardian_student_links l JOIN users g ON g.id=l.guardian_id JOIN users s ON s.id=l.student_id
+    WHERE l.institution_id=? ORDER BY l.verified_at DESC LIMIT 100`).all(req.user.institution_id);
+  res.json({invitations,links});
+});
+app.delete("/api/guardians/invitations/:id",auth,roles("admin"),(req,res)=>{
+  const changed=db.prepare("DELETE FROM guardian_invitations WHERE id=? AND institution_id=? AND used_at IS NULL").run(Number(req.params.id),req.user.institution_id);
+  if(!changed.changes) return res.status(404).json({error:"Pending invitation not found."});
+  log(req.user.id,"Cancelled guardian invitation",String(req.params.id),req.user.institution_id);
+  res.json({ok:true});
 });
 app.get("/api/guardian/children",auth,(req,res)=>{
   if(req.user.institution_role!=="parent") return res.status(403).json({error:"Parent access required."});

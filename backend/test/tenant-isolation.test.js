@@ -161,6 +161,78 @@ test("platform onboarding, login, tenant isolation and suspension are enforced",
   const parentRouteDeniedForAdmin = await request("/api/guardian/children", { token: adminA.token });
   assert.equal(parentRouteDeniedForAdmin.status, 403, "guardian data endpoints require a parent membership");
 
+  const studentA = await request("/api/admin/users", {
+    method: "POST", token: adminA.token,
+    body: { name: "Northfield Student", email: "northfield.student@example.test", password: "StudentPassword!2026", role: "student" }
+  });
+  assert.equal(studentA.status, 201, JSON.stringify(studentA.body));
+  assert.equal(studentA.body.institution_role, "student");
+  const crossSchoolStudentInvite = await request("/api/guardians/invitations", {
+    method: "POST", token: adminB.token,
+    body: { student_id: studentA.body.id, email: "guardian.cross@example.test" }
+  });
+  assert.equal(crossSchoolStudentInvite.status, 404, "a school cannot issue guardian invitations for another school's student");
+  const inviteA = await request("/api/guardians/invitations", {
+    method: "POST", token: adminA.token,
+    body: { student_id: studentA.body.id, email: "guardian.a@example.test" }
+  });
+  assert.equal(inviteA.status, 201, JSON.stringify(inviteA.body));
+  const wrongEmailRedeem = await request("/api/auth/guardian/redeem", {
+    method: "POST",
+    body: { token: inviteA.body.invitation_token, name: "Guardian A", email: "wrong@example.test", password: "GuardianPassword!2026" }
+  });
+  assert.equal(wrongEmailRedeem.status, 400);
+  const redeemA = await request("/api/auth/guardian/redeem", {
+    method: "POST",
+    body: { token: inviteA.body.invitation_token, name: "Guardian A", email: "guardian.a@example.test", password: "GuardianPassword!2026" }
+  });
+  assert.equal(redeemA.status, 201, JSON.stringify(redeemA.body));
+  assert.equal(redeemA.body.user.role, "parent");
+  const childrenA = await request("/api/guardian/children", { token: redeemA.body.token });
+  assert.equal(childrenA.status, 200);
+  assert.deepEqual(childrenA.body.map(child => child.id), [studentA.body.id]);
+  const parentAdminRoute = await request("/api/dashboard", { token: redeemA.body.token });
+  assert.equal(parentAdminRoute.status, 403);
+  const reusedInvite = await request("/api/auth/guardian/redeem", {
+    method: "POST",
+    body: { token: inviteA.body.invitation_token, name: "Guardian A", email: "guardian.a@example.test", password: "GuardianPassword!2026" }
+  });
+  assert.equal(reusedInvite.status, 400);
+  const manageA = await request("/api/guardians/manage", { token: adminA.token });
+  assert.equal(manageA.status, 200);
+  assert.equal(manageA.body.invitations[0].status, "accepted");
+  const manageB = await request("/api/guardians/manage", { token: adminB.token });
+  assert.equal(manageB.status, 200);
+  assert.deepEqual(manageB.body.invitations, []);
+  const revoked = await request("/api/guardians/children/" + studentA.body.id, {
+    method: "DELETE", token: adminA.token, body: { guardian_id: redeemA.body.user.id }
+  });
+  assert.equal(revoked.status, 200);
+  const afterRevoke = await request("/api/guardian/children", { token: redeemA.body.token });
+  assert.deepEqual(afterRevoke.body, []);
+
+  const existingGuardian = await request("/api/admin/users", {
+    method: "POST", token: adminB.token,
+    body: { name: "Existing User", email: "existing.guardian@example.test", password: "ExistingPassword!2026", role: "student" }
+  });
+  assert.equal(existingGuardian.status, 201);
+  const inviteExisting = await request("/api/guardians/invitations", {
+    method: "POST", token: adminA.token,
+    body: { student_id: studentA.body.id, email: "existing.guardian@example.test" }
+  });
+  assert.equal(inviteExisting.status, 201);
+  const wrongExistingPassword = await request("/api/auth/guardian/redeem", {
+    method: "POST",
+    body: { token: inviteExisting.body.invitation_token, name: "Existing User", email: "existing.guardian@example.test", password: "WrongPassword!2026" }
+  });
+  assert.equal(wrongExistingPassword.status, 400, "existing accounts must prove password possession before linking");
+  const redeemExisting = await request("/api/auth/guardian/redeem", {
+    method: "POST",
+    body: { token: inviteExisting.body.invitation_token, name: "Existing User", email: "existing.guardian@example.test", password: "ExistingPassword!2026" }
+  });
+  assert.equal(redeemExisting.status, 201, JSON.stringify(redeemExisting.body));
+  assert.equal(redeemExisting.body.user.role, "parent");
+
   const suspended = await request(`/api/platform/institutions/${schoolA.institution.id}/status`, {
     method: "PATCH",
     platform: true,

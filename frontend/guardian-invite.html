@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Accept guardian invitation • MyClassroom</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="auth-card">
+  <a class="brand" href="/">MyClassroom</a>
+  <h1>Accept guardian invitation</h1>
+  <p class="muted">Use the email address the school invited. If you already have a MyClassroom account, enter your existing password.</p>
+  <form id="guardianRedeem">
+    <label>One-time invitation token<input name="token" required minlength="32" autocomplete="off"></label>
+    <label>Full name<input name="name" required minlength="2" maxlength="120" autocomplete="name"></label>
+    <label>Invited email<input name="email" type="email" required autocomplete="email"></label>
+    <label>Password<input name="password" type="password" required minlength="10" maxlength="128" autocomplete="new-password"></label>
+    <button class="btn">Accept invitation</button>
+  </form>
+  <div id="msg"></div>
+  <p class="small">This invitation can be used once and expires after seven days. Contact the school if it has expired or the email is incorrect.</p>
+  <a href="/login.html">Already accepted? Log in</a>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
