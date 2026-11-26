@@ -147,7 +147,7 @@ function createAssessmentsRepository(database) {
         [assessment.id, id]
       );
       if (existing && existing.submitted_at) {
-        const timedOut = Date.parse(existing.submitted_at) >= Date.parse(existing.expires_at);
+        const timedOut = existing.submitted_at === existing.expires_at;
         const error = new Error(timedOut ? "Assessment time has expired" : "Assessment already submitted");
         error.status = 400;
         error.attempt = { ...existing, timed_out: timedOut };
@@ -218,8 +218,7 @@ function createAssessmentsRepository(database) {
       if (attempt.submitted_at) {
         return {
           ...attempt,
-          timed_out: Number.isFinite(Date.parse(attempt.expires_at)) &&
-            Date.parse(attempt.submitted_at) >= Date.parse(attempt.expires_at)
+          timed_out: attempt.submitted_at === attempt.expires_at
         };
       }
       const deadline = Date.parse(attempt.expires_at);
@@ -268,7 +267,7 @@ function createAssessmentsRepository(database) {
         throw error;
       }
       if (attempt.submitted_at) {
-        return { ok: true, timed_out: Date.parse(attempt.submitted_at) >= Date.parse(attempt.expires_at) };
+        return { ok: true, timed_out: attempt.submitted_at === attempt.expires_at };
       }
       const deadline = Date.parse(attempt.expires_at);
       if (!Number.isFinite(deadline)) {
