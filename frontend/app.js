@@ -1,10 +1,22 @@
-async function openMaterialFile(id){try{const r=await fetch("/api/materials/"+encodeURIComponent(id)+"/file",{headers:{Authorization:"Bearer "+token()}});if(!r.ok){let d={};try{d=await r.json()}catch{}throw new Error(d.error||"Unable to open file")}const blob=await r.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="learning-material-"+id;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000)}catch(e){toast(e.message)}}
+async function openMaterialFile(id){try{const r=await fetch("/api/materials/"+encodeURIComponent(id)+"/file",{credentials:"same-origin"});if(!r.ok){let d={};try{d=await r.json()}catch{}throw new Error(d.error||"Unable to open file")}const blob=await r.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="learning-material-"+id;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000)}catch(e){toast(e.message)}}
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const token=()=>sessionStorage.getItem("mc_token");
-async function api(url,opts={}){opts.headers=opts.headers||{};if(token())opts.headers.Authorization="Bearer "+token();if(!(opts.body instanceof FormData))opts.headers["Content-Type"]="application/json";const r=await fetch("/api"+url,opts);let d={};try{d=await r.json()}catch{}if(!r.ok){const error=new Error(d.error||"Request failed");error.status=r.status;error.data=d;throw error}return d}
+let csrfToken=null;
+async function api(url,opts={}){
+ opts={...opts,headers:{...(opts.headers||{})},credentials:"same-origin"};
+ const method=String(opts.method||"GET").toUpperCase();
+ if(!["GET","HEAD","OPTIONS"].includes(method) && !["/auth/login","/auth/register","/auth/guardian/redeem","/auth/request-reset","/auth/reset"].includes(url)){
+  if(!csrfToken){const csrfResponse=await fetch("/api/auth/csrf",{credentials:"same-origin",cache:"no-store"});let csrfData={};try{csrfData=await csrfResponse.json()}catch{}if(!csrfResponse.ok)throw new Error(csrfData.error||"Your session has expired. Please sign in again.");csrfToken=csrfData.csrfToken;}
+  opts.headers["X-CSRF-Token"]=csrfToken;
+ }
+ if(!(opts.body instanceof FormData))opts.headers["Content-Type"]="application/json";
+ const r=await fetch("/api"+url,opts);let d={};try{d=await r.json()}catch{}
+ if(d.csrfToken)csrfToken=d.csrfToken;
+ if(!r.ok){const error=new Error(d.error||"Request failed");error.status=r.status;error.data=d;throw error}
+ return d;
+}
 function toast(t){const x=document.createElement("div");x.className="toast";x.textContent=t;document.body.appendChild(x);setTimeout(()=>x.remove(),2600)}
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
-function logout(){sessionStorage.removeItem("mc_token");sessionStorage.removeItem("mc_user");location.href="/login.html"}
+async function logout(){try{await api("/auth/logout",{method:"POST"})}catch{}csrfToken=null;sessionStorage.removeItem("mc_user");location.href="/login.html"}
 async function initAuth(){
  if($("#login"))$("#login").onsubmit=async e=>{
   e.preventDefault();
@@ -14,7 +26,7 @@ async function initAuth(){
    if(institutionId)payload.institution_id=institutionId;
    const d=await api("/auth/login",{method:"POST",body:JSON.stringify(payload)});
    if(d.must_change_password)d.user.must_change_password=true;
-    sessionStorage.mc_token=d.token;sessionStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html";
+    csrfToken=d.csrfToken;sessionStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html";
   };
   try{await finish("")}
   catch(err){
@@ -28,17 +40,18 @@ async function initAuth(){
    }else $("#msg").innerHTML=`<p class="error">${esc(err.message)}</p>`;
   }
  };
- if($("#register"))$("#register").onsubmit=async e=>{e.preventDefault();try{const d=await api("/auth/register",{method:"POST",body:JSON.stringify({name:$("#name").value,email:$("#email").value,password:$("#password").value,role:$("#role").value})});sessionStorage.mc_token=d.token;sessionStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html"}catch(err){$("#msg").innerHTML=`<p class="error">${esc(err.message)}</p>`}};
- if($("#guardianRedeem"))$("#guardianRedeem").onsubmit=async e=>{e.preventDefault();const form=Object.fromEntries(new FormData(e.currentTarget));try{const d=await api("/auth/guardian/redeem",{method:"POST",body:JSON.stringify(form)});sessionStorage.mc_token=d.token;sessionStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html"}catch(err){$("#msg").innerHTML=`<p class="error">${esc(err.message)}</p>`}};
+ if($("#register"))$("#register").onsubmit=async e=>{e.preventDefault();try{const d=await api("/auth/register",{method:"POST",body:JSON.stringify({name:$("#name").value,email:$("#email").value,password:$("#password").value,role:$("#role").value})});csrfToken=d.csrfToken;sessionStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html"}catch(err){$("#msg").innerHTML=`<p class="error">${esc(err.message)}</p>`}};
+ if($("#guardianRedeem"))$("#guardianRedeem").onsubmit=async e=>{e.preventDefault();const form=Object.fromEntries(new FormData(e.currentTarget));try{const d=await api("/auth/guardian/redeem",{method:"POST",body:JSON.stringify(form)});csrfToken=d.csrfToken;sessionStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html"}catch(err){$("#msg").innerHTML=`<p class="error">${esc(err.message)}</p>`}};
 }
 const state={page:"overview",data:{}};
 async function boot(){
  if(!$("#app"))return;
- if(!token())return location.href="/login.html";
+ if(!sessionStorage.mc_user)return location.href="/login.html";
  state.user=JSON.parse(sessionStorage.mc_user||"{}");
+ try{csrfToken=(await api("/auth/csrf")).csrfToken;}catch{sessionStorage.removeItem("mc_user");return location.href="/login.html";}
  if(state.user.must_change_password){
   $("#app").innerHTML='<main class="card" style="max-width:520px;margin:8vh auto;padding:28px"><h1>Change your temporary password</h1><p class="muted">Your school administrator created this account. Set a new password before continuing.</p><form id="firstPassword" class="formgrid"><label class="full">Current temporary password<input name="currentPassword" type="password" required autocomplete="current-password"></label><label class="full">New password<input name="newPassword" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><label class="full">Confirm new password<input name="confirmPassword" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><div class="full"><button class="btn">Save new password</button></div></form><p id="passwordError" class="error" role="alert"></p><button class="btn secondary" type="button" onclick="logout()">Log out</button></main>';
-  $("#firstPassword").onsubmit=async event=>{event.preventDefault();const values=Object.fromEntries(new FormData(event.currentTarget));if(values.newPassword!==values.confirmPassword){$("#passwordError").textContent="The new passwords do not match.";return;}try{const result=await api("/auth/change-password",{method:"POST",body:JSON.stringify({currentPassword:values.currentPassword,newPassword:values.newPassword})});delete state.user.must_change_password;sessionStorage.mc_user=JSON.stringify(state.user);sessionStorage.mc_token=result.token;location.reload();}catch(error){$("#passwordError").textContent=error.message;}};
+  $("#firstPassword").onsubmit=async event=>{event.preventDefault();const values=Object.fromEntries(new FormData(event.currentTarget));if(values.newPassword!==values.confirmPassword){$("#passwordError").textContent="The new passwords do not match.";return;}try{const result=await api("/auth/change-password",{method:"POST",body:JSON.stringify({currentPassword:values.currentPassword,newPassword:values.newPassword})});delete state.user.must_change_password;sessionStorage.mc_user=JSON.stringify(state.user);csrfToken=result.csrfToken;location.reload();}catch(error){$("#passwordError").textContent=error.message;}};
   return;
  }
  $("#app").innerHTML=`<div class="shell"><aside class="side" id="sidebar"><a class="brand" href="#">MyClassroom</a><div class="small" style="color:#aeb9ca">${esc(state.user.role.toUpperCase())} PORTAL</div><div class="nav">
@@ -118,7 +131,7 @@ async function studentOverview(){
 }
 
 async function overview(){const d=await api("/dashboard"), s=d.stats||{};$("#view").innerHTML=`<div class="grid">${Object.entries(s).map(([k,v])=>`<div class="stat"><span>${title(k)}</span><strong>${v}</strong></div>`).join("")}</div><div class="cards" style="margin-top:16px"><div class="card"><h3>Welcome to V12</h3><p>Use the navigation to manage classes, learning, assessments, attendance and school operations.</p></div><div class="card"><h3>Quick actions</h3><div class="toolbar"><button class="btn" onclick="show('${state.user.role==="student"?"classes":"classes"}')">Open classes</button><button class="btn secondary" onclick="show('assessments')">Assessments</button></div></div><div class="card"><h3>Security</h3><p>Change your password from Profile. Production deployments should add HTTPS, rate limiting and secure cookies.</p></div></div>`}
-async function profile(){const u=await api("/me");$("#view").innerHTML=`<div class="card"><h3>My profile</h3><form id="pf" class="formgrid"><label>Name<input name="name" value="${esc(u.name)}"></label><label>Phone<input name="phone" value="${esc(u.phone)}"></label><label class="full">Bio<textarea name="bio">${esc(u.bio)}</textarea></label><div><button class="btn">Save profile</button></div></form></div><div class="card" style="margin-top:16px"><h3>Change password</h3><form id="pw" class="formgrid"><label>Current password<input name="currentPassword" type="password"></label><label>New password<input name="newPassword" type="password" minlength="6"></label><div><button class="btn">Change password</button></div></form></div>`;$("#pf").onsubmit=async e=>{e.preventDefault();const o=Object.fromEntries(new FormData(e));await api("/me",{method:"PATCH",body:JSON.stringify(o)});state.user={...state.user,...o};sessionStorage.mc_user=JSON.stringify(state.user);toast("Profile saved")};$("#pw").onsubmit=async e=>{e.preventDefault();await api("/auth/change-password",{method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(e)))});toast("Password changed")}}
+async function profile(){const u=await api("/me");$("#view").innerHTML=`<div class="card"><h3>My profile</h3><form id="pf" class="formgrid"><label>Name<input name="name" value="${esc(u.name)}"></label><label>Phone<input name="phone" value="${esc(u.phone)}"></label><label class="full">Bio<textarea name="bio">${esc(u.bio)}</textarea></label><div><button class="btn">Save profile</button></div></form></div><div class="card" style="margin-top:16px"><h3>Change password</h3><form id="pw" class="formgrid"><label>Current password<input name="currentPassword" type="password"></label><label>New password<input name="newPassword" type="password" minlength="6"></label><div><button class="btn">Change password</button></div></form></div>`;$("#pf").onsubmit=async e=>{e.preventDefault();const o=Object.fromEntries(new FormData(e));await api("/me",{method:"PATCH",body:JSON.stringify(o)});state.user={...state.user,...o};sessionStorage.mc_user=JSON.stringify(state.user);toast("Profile saved")};$("#pw").onsubmit=async e=>{e.preventDefault();const changed=await api("/auth/change-password",{method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(e)))});csrfToken=changed.csrfToken;toast("Password changed")}}
 async function people(){
  const list=state.user.role==="admin"?await api("/admin/users"):await api("/students");
  $("#view").innerHTML=`
