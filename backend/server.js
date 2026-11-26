@@ -49,7 +49,7 @@ app.use((req,res,next)=>{
   if (!allowedOrigins.includes(origin) && !localOrigin) return res.status(403).json({error:"Request origin is not allowed."});
   next();
 });
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: process.env.NODE_ENV === "test" ? 100 : 10, standardHeaders: true, legacyHeaders: false, message: { error: "Too many authentication attempts. Please try again later." } });
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: process.env.NODE_ENV === "test" ? 100 : 10, standardHeaders: true, legacyHeaders: false, skip: req => req.path === "/csrf", message: { error: "Too many authentication attempts. Please try again later." } });
 app.use("/api/auth", authLimiter);
 // Uploaded learning files are served only through authenticated, institution-scoped routes.
 
@@ -77,6 +77,7 @@ function clearSessionCookie(res) {
   res.setHeader("Set-Cookie",SESSION_COOKIE+"=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"+secure);
 }
 function issueSession(user,institutionId,res) {
+  res.setHeader("Cache-Control","no-store");
   const membership=activeMembership(user.id,institutionId);
   if(!membership) throw new Error("User has no active institution membership");
   const session=sessionStore.create({userId:user.id,institutionId:membership.institution_id});
