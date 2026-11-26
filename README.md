@@ -52,3 +52,17 @@ npm run migrate:all
 The ordered migrations create institution and institution-membership tables, add institution references to existing class, announcement, audit and settings records, create institution-isolated settings storage, and scope notifications and messages to an institution. Existing single-school communication records are assigned to `legacy-school`. Migrations are idempotent and record their versions in `schema_migrations`. The server also ensures the required schema exists at startup for existing installations.
 
 **This is an early tenant-scoping implementation, not production certification.** Do not onboard a second school or expose real school data until the API changes, role flows, deployment, and cross-institution isolation tests have been independently tested and reviewed. Back up the SQLite database before running migrations on any database containing data. Existing local demo data is assigned to `legacy-school`.
+
+## Platform owner console (early access)
+
+The platform owner console is available at `/platform-owner`. It uses a separate server-side secret and is not tied to a school administrator account.
+
+Before using it, configure `PLATFORM_OWNER_KEY` as a randomly generated secret of at least 32 characters in the backend environment. Do not commit the key or put it in frontend source. The console sends it in an HTTPS request header; keep the page restricted to trusted operators and rotate the key immediately if exposed.
+
+The console currently supports:
+- Listing institutions and active member counts.
+- Creating an institution with country, timezone and currency settings.
+- Creating its first school administrator in the same database transaction.
+- Suspending and reactivating an institution (the original `legacy-school` is protected).
+
+The initial administrator password is supplied during creation and is never returned by the API. Share it through a secure channel and require the administrator to change it after first sign-in. This is an early operational console, not yet a full subscription/billing system or an invitation/email workflow. Do not onboard live schools until cross-tenant API integration tests, deployment storage/database readiness and security review are complete.
