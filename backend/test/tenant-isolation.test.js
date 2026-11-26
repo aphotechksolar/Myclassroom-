@@ -25,11 +25,11 @@ async function unusedPort() {
   });
 }
 
-async function request(route, { method = "GET", body, token, platform = false } = {}) {
+async function request(route, { method = "GET", body, token, platform = false, csrf = true } = {}) {
   const headers = {};
   if (body !== undefined) headers["content-type"] = "application/json";
   if (token && sessionCookies.has(token)) headers.cookie = sessionCookies.get(token);
-  if (token && csrfTokens.has(token) && !["GET","HEAD","OPTIONS"].includes(method.toUpperCase())) {
+  if (csrf && token && csrfTokens.has(token) && !["GET","HEAD","OPTIONS"].includes(method.toUpperCase())) {
     headers["x-csrf-token"] = csrfTokens.get(token);
   }
   if (platform) headers["x-platform-owner-key"] = platformKey;
@@ -328,4 +328,16 @@ test("platform onboarding, login, tenant isolation and suspension are enforced",
 
   const stillActiveDashboard = await request("/api/dashboard", { token: adminB.token });
   assert.equal(stillActiveDashboard.status, 200, "suspending one school must not affect another school");
+
+  const missingCsrf = await request("/api/me", {
+    method: "PATCH", token: adminB.token, csrf: false,
+    body: { name: "Should Not Be Saved" }
+  });
+  assert.equal(missingCsrf.status, 403, "cookie-authenticated writes require a valid CSRF token");
+
+  const logout = await request("/api/auth/logout", { method: "POST", token: adminB.token });
+  assert.equal(logout.status, 200);
+  assert.match(logout.headers.get("set-cookie") || "", /Max-Age=0/, "logout clears the browser session cookie");
+  const afterLogout = await request("/api/dashboard", { token: adminB.token });
+  assert.equal(afterLogout.status, 401, "a logged-out server-side session cannot be reused");
 });
