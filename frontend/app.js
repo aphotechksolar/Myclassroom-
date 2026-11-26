@@ -14,10 +14,11 @@ async function boot(){
  if(!$("#app"))return;
  if(!token())return location.href="/login.html";
  state.user=JSON.parse(localStorage.mc_user||"{}");
- $("#app").innerHTML=`<div class="shell"><aside class="side"><a class="brand" href="#">MyClassroom</a><div class="small" style="color:#aeb9ca">${esc(state.user.role.toUpperCase())} PORTAL</div><div class="nav">
+ $("#app").innerHTML=`<div class="shell"><aside class="side" id="sidebar"><a class="brand" href="#">MyClassroom</a><div class="small" style="color:#aeb9ca">${esc(state.user.role.toUpperCase())} PORTAL</div><div class="nav">
  ${["overview","profile","people","classes","materials","assignments","assessments","attendance","timetable","performance","messages","notifications","reports","admin"].filter(p=>state.user.role==="admin"||p!=="admin").map(p=>`<button data-page="${p}">${icons[p]||"•"} ${title(p)}</button>`).join("")}
- <button onclick="logout()">↪ Log out</button></div></aside><main class="main"><div class="bar"><div><h1 id="title">Overview</h1><span class="muted" id="subtitle"></span></div><div class="userbox">${esc(state.user.name)} · ${esc(state.user.email)}</div></div><div id="view"></div></main></div><div id="modal" class="modal"></div>`;
- $$(".nav button[data-page]").forEach(b=>b.onclick=()=>show(b.dataset.page));
+ <button onclick="logout()">↪ Log out</button></div></aside><main class="main"><div class="bar"><div class="bar-heading"><button class="menu-toggle" id="menuToggle" aria-label="Toggle navigation" aria-expanded="false">☰</button><div><h1 id="title">Overview</h1><span class="muted" id="subtitle"></span></div></div><div class="userbox">${esc(state.user.name)} · ${esc(state.user.email)}</div></div><div id="view"></div></main></div><div id="modal" class="modal"></div>`;
+ $(".nav button[data-page]").forEach(b=>b.onclick=()=>{show(b.dataset.page);$("#sidebar").classList.remove("side-open");$("#menuToggle").setAttribute("aria-expanded","false")});
+ $("#menuToggle").onclick=()=>{const open=$("#sidebar").classList.toggle("side-open");$("#menuToggle").setAttribute("aria-expanded",String(open))};
  await show("overview");
 }
 const icons={overview:"⌂",profile:"◉",people:"♟",classes:"▦",materials:"▤",assignments:"✓",assessments:"✎",attendance:"◷",timetable:"▥",performance:"↗",messages:"✉",notifications:"●",reports:"▣",admin:"⚙"};
@@ -25,12 +26,36 @@ function title(x){return x[0].toUpperCase()+x.slice(1).replace("-", " ")}
 async function show(page){
  state.page=page;$$(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.page===page));$("#title").textContent=title(page);$("#subtitle").textContent="";
  try{
-  if(page==="overview")return overview(); if(page==="profile")return profile(); if(page==="people")return people(); if(page==="classes")return classes();
+  if(page==="overview")return state.user.role==="student"?studentOverview():overview(); if(page==="profile")return profile(); if(page==="people")return people(); if(page==="classes")return classes();
   if(page==="materials")return materials(); if(page==="assignments")return assignments(); if(page==="assessments")return assessments(); if(page==="attendance")return attendance();
   if(page==="timetable")return timetable(); if(page==="performance")return performance(); if(page==="messages")return messages(); if(page==="notifications")return notifications();
   if(page==="reports")return reports(); if(page==="admin")return admin();
  }catch(e){$("#view").innerHTML=`<div class="card"><p class="error">${esc(e.message)}</p></div>`}
 }
+
+async function studentOverview(){
+ const [dash,assignments,assessments,announcements,timetable]=await Promise.all([
+  api("/dashboard"),api("/assignments"),api("/assessments"),api("/announcements"),api("/timetable")
+ ]);
+ const stats=dash.stats||{};
+ const due=assignments.filter(a=>a.due_date).sort((a,b)=>String(a.due_date).localeCompare(String(b.due_date))).slice(0,4);
+ const upcoming=assessments.slice(0,4);
+ const today=new Date().toLocaleDateString("en-US",{weekday:"long"});
+ const todayClasses=timetable.filter(t=>String(t.day||"").toLowerCase()===today.toLowerCase());
+ $("#subtitle").textContent=dash.school||"Your learning at a glance";
+ $("#view").innerHTML=`
+ <section class="student-welcome"><div><span class="pill">STUDENT LEARNING SPACE</span><h2>Welcome back, ${esc(state.user.name.split(" ")[0])}.</h2><p>Here is what is happening with your learning today.</p></div><div class="student-welcome-icon" aria-hidden="true">✦</div></section>
+ <div class="grid student-stats">${Object.entries(stats).map(([k,v])=>`<div class="stat"><span>${title(k)}</span><strong>${esc(v)}</strong></div>`).join("")}</div>
+ <div class="student-columns">
+  <section class="card"><div class="section-heading"><h3>Assignments to work on</h3><button class="text-action" data-go="assignments">View all</button></div>${due.length?due.map(a=>`<div class="student-list-item"><div><b>${esc(a.title)}</b><span>${esc(a.class_name||"Class")} · Due ${esc(a.due_date)}</span></div><span class="chip">${esc(a.max_score)} marks</span></div>`).join(""):`<p class="muted">No upcoming dated assignments.</p>`}</section>
+  <section class="card"><div class="section-heading"><h3>Assessments</h3><button class="text-action" data-go="assessments">View all</button></div>${upcoming.length?upcoming.map(a=>`<div class="student-list-item"><div><b>${esc(a.title)}</b><span>${esc(a.class_name||"Class")} · ${esc(a.duration_minutes)} minutes</span></div><span class="chip">${esc(a.type)}</span></div>`).join(""):`<p class="muted">No assessments available right now.</p>`}</section>
+  <section class="card"><div class="section-heading"><h3>Today's timetable</h3><button class="text-action" data-go="timetable">Full timetable</button></div>${todayClasses.length?todayClasses.map(t=>`<div class="student-list-item"><div><b>${esc(t.subject_name||"Lesson")}</b><span>${esc(t.class_name||"Class")} · ${esc(t.room||"Room not set")}</span></div><span class="chip">${esc(t.start_time||"")}–${esc(t.end_time||"")}</span></div>`).join(""):`<p class="muted">No lessons listed for today.</p>`}</section>
+  <section class="card"><div class="section-heading"><h3>School updates</h3><button class="text-action" data-go="notifications">Notifications</button></div>${announcements.length?announcements.slice(0,3).map(a=>`<article class="student-announcement"><b>${esc(a.title)}</b><p>${esc(a.body)}</p><span>${esc(a.created_at||"")}</span></article>`).join(""):`<p class="muted">No new announcements.</p>`}</section>
+ </div>
+ <section class="student-shortcuts"><button class="btn" data-go="classes">My classes</button><button class="btn secondary" data-go="materials">Learning materials</button><button class="btn secondary" data-go="performance">My results</button></section>`;
+ $("[data-go]").forEach(b=>b.onclick=()=>show(b.dataset.go));
+}
+
 async function overview(){const d=await api("/dashboard"), s=d.stats||{};$("#view").innerHTML=`<div class="grid">${Object.entries(s).map(([k,v])=>`<div class="stat"><span>${title(k)}</span><strong>${v}</strong></div>`).join("")}</div><div class="cards" style="margin-top:16px"><div class="card"><h3>Welcome to V12</h3><p>Use the navigation to manage classes, learning, assessments, attendance and school operations.</p></div><div class="card"><h3>Quick actions</h3><div class="toolbar"><button class="btn" onclick="show('${state.user.role==="student"?"classes":"classes"}')">Open classes</button><button class="btn secondary" onclick="show('assessments')">Assessments</button></div></div><div class="card"><h3>Security</h3><p>Change your password from Profile. Production deployments should add HTTPS, rate limiting and secure cookies.</p></div></div>`}
 async function profile(){const u=await api("/me");$("#view").innerHTML=`<div class="card"><h3>My profile</h3><form id="pf" class="formgrid"><label>Name<input name="name" value="${esc(u.name)}"></label><label>Phone<input name="phone" value="${esc(u.phone)}"></label><label class="full">Bio<textarea name="bio">${esc(u.bio)}</textarea></label><div><button class="btn">Save profile</button></div></form></div><div class="card" style="margin-top:16px"><h3>Change password</h3><form id="pw" class="formgrid"><label>Current password<input name="currentPassword" type="password"></label><label>New password<input name="newPassword" type="password" minlength="6"></label><div><button class="btn">Change password</button></div></form></div>`;$("#pf").onsubmit=async e=>{e.preventDefault();const o=Object.fromEntries(new FormData(e));await api("/me",{method:"PATCH",body:JSON.stringify(o)});state.user={...state.user,...o};localStorage.mc_user=JSON.stringify(state.user);toast("Profile saved")};$("#pw").onsubmit=async e=>{e.preventDefault();await api("/auth/change-password",{method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(e)))});toast("Password changed")}}
 async function people(){const list=state.user.role==="admin"?await api("/admin/users"):await api("/students");$("#view").innerHTML=`<div class="toolbar"><input id="psearch" placeholder="Search people..."><button class="btn" onclick="openUserModal()">Add user</button></div><div class="tablewrap"><table class="table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Phone</th><th></th></tr></thead><tbody id="pt">${list.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td><span class="chip">${esc(u.role||"student")}</span></td><td>${esc(u.phone)}</td><td>${state.user.role==="admin"?`<button class="btn secondary" onclick='editUser(${JSON.stringify(u)})'>Edit</button>`:""}</td></tr>`).join("")}</tbody></table></div>`;$("#psearch").oninput=e=>$$(`#pt tr`).forEach(r=>r.style.display=r.textContent.toLowerCase().includes(e.target.value.toLowerCase())?"":"none")}
