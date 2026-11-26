@@ -237,8 +237,8 @@ function roles(...allowed){ return (req,res,next)=>{
   const role=req.user.institution_role==="school_admin"?"admin":req.user.institution_role;
   return allowed.includes(role)?next():res.status(403).json({error:"Not allowed"});
 }; }
-function sign(user){
-  const membership=activeMembership(user.id);
+function sign(user,institutionId){
+  const membership=activeMembership(user.id,institutionId);
   if(!membership) throw new Error("User has no active institution membership");
   return jwt.sign({id:user.id,name:user.name,email:user.email,role:user.role,institution_id:membership.institution_id,institution_role:membership.role},SECRET,{expiresIn:"7d"});
 }
@@ -280,9 +280,15 @@ app.post("/api/auth/register",(req,res)=>{
 app.post("/api/auth/login",(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE email=?").get(String(req.body.email||"").trim().toLowerCase());
   if(!u||!bcrypt.compareSync(req.body.password||"",u.password_hash)) return res.status(401).json({error:"Invalid email or password"});
-  const membership=activeMembership(u.id);
-  if(!membership) return res.status(403).json({error:"This account has no active school membership. Contact your school administrator."});
-  res.json({user:{id:u.id,name:u.name,email:u.email,role:u.role,phone:u.phone,bio:u.bio,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(u)});
+  const membership=activeMembership(u.id,req.body.institution_id||null);
+  if(!membership) return res.status(403).json({error:"This account has no active membership in the selected school."});
+  res.json({user:{id:u.id,name:u.name,email:u.email,role:u.role,phone:u.phone,bio:u.bio,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(u,membership.institution_id)});
+});
+app.post("/api/auth/switch-institution",auth,(req,res)=>{
+  const membership=activeMembership(req.user.id,String(req.body.institution_id||""));
+  if(!membership) return res.status(403).json({error:"No active membership in that institution."});
+  const user=db.prepare("SELECT id,name,email,role,phone,bio FROM users WHERE id=?").get(req.user.id);
+  res.json({user:{...user,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(user,membership.institution_id)});
 });
 app.post("/api/auth/change-password",auth,(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE id=?").get(req.user.id);
