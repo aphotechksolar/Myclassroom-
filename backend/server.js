@@ -4,6 +4,8 @@ const path = require("path");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { createDatabase } = require("./db");
+const { openAsyncSqliteDatabase } = require("./db/sqlite-async");
+const { createSettingsRepository } = require("./repositories/settings");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const helmet = require("helmet");
@@ -36,6 +38,8 @@ app.use("/api/auth", authLimiter);
 // Uploaded learning files are served only through authenticated, institution-scoped routes.
 
 const db = createDatabase(path.join(DATA, "myclassroom.db"));
+const asyncDb = openAsyncSqliteDatabase(db);
+const settingsRepository = createSettingsRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -593,7 +597,12 @@ app.get("/api/report-card/:studentId",auth,(req,res)=>{
   const school=db.prepare("SELECT value FROM institution_settings WHERE key='school_name' AND institution_id=?").get(req.user.institution_id)?.value||req.user.institution_name||"MyClassroom Academy";
   res.json({school,student,subjects,attendance:att});
 });
-app.get("/api/settings",auth,(req,res)=>res.json(Object.fromEntries(db.prepare("SELECT key,value FROM institution_settings WHERE institution_id=?").all(req.user.institution_id).map(x=>[x.key,x.value]))));
+app.get("/api/settings",auth,async(req,res,next)=>{
+  try {
+    const rows = await settingsRepository.listForInstitution(req.user.institution_id);
+    res.json(Object.fromEntries(rows.map(({key,value})=>[key,value])));
+  } catch (error) { next(error); }
+});
 app.patch("/api/settings",auth,roles("admin"),(req,res)=>{for(const [k,v] of Object.entries(req.body)){db.prepare("INSERT INTO institution_settings(institution_id,key,value,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(institution_id,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").run(req.user.institution_id,k,String(v));}log(req.user.id,"Updated school settings","",req.user.institution_id);res.json({ok:true});});
 
 app.get("/api/dashboard",auth,(req,res)=>{
