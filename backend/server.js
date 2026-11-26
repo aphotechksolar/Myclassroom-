@@ -1,10 +1,10 @@
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-const fs = require("fs");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { createDatabase } = require("./db");
+const { createStorage } = require("./storage");
 const multer = require("multer");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
@@ -19,8 +19,7 @@ const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, "..", "frontend");
 const DATA = path.resolve(process.env.MYCLASSROOM_DATA_DIR || path.join(ROOT, "data"));
 const UPLOADS = path.resolve(process.env.MYCLASSROOM_UPLOADS_DIR || path.join(ROOT, "uploads"));
-fs.mkdirSync(DATA, {recursive:true});
-fs.mkdirSync(UPLOADS, {recursive:true});
+
 
 const allowedOrigins = (process.env.CORS_ORIGINS || "").split(",").map(x => x.trim()).filter(Boolean);
 const corsOptions = { origin(origin, callback) {
@@ -37,6 +36,7 @@ app.use("/api/auth", authLimiter);
 // Uploaded learning files are served only through authenticated, institution-scoped routes.
 
 const db = createDatabase(path.join(DATA, "myclassroom.db"));
+const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users(
@@ -482,7 +482,7 @@ app.get("/api/subjects",auth,(req,res)=>{const rows=req.user.institution_role===
 app.post("/api/timetable",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id);if(!c)return res.status(403).json({error:"Not allowed"});const subjectId=req.body.subject_id||null;if(subjectId&&!db.prepare("SELECT 1 FROM subjects WHERE id=? AND class_id=?").get(subjectId,c.id))return res.status(400).json({error:"Subject must belong to this class"});const r=db.prepare("INSERT INTO timetable(class_id,subject_id,day,start_time,end_time,room) VALUES(?,?,?,?,?,?)").run(c.id,subjectId,req.body.day,req.body.start_time,req.body.end_time,req.body.room||"");res.json({id:r.lastInsertRowid});});
 app.get("/api/timetable",auth,(req,res)=>{let sql=`SELECT t.*,c.name class_name,s.name subject_name FROM timetable t LEFT JOIN classes c ON c.id=t.class_id LEFT JOIN subjects s ON s.id=t.subject_id`;let rows;if(req.user.institution_role==="student") rows=db.prepare(sql+" JOIN enrollments e ON e.class_id=t.class_id WHERE c.institution_id=? AND e.student_id=? ORDER BY CASE t.day WHEN 'Monday' THEN 1 WHEN 'Tuesday' THEN 2 WHEN 'Wednesday' THEN 3 WHEN 'Thursday' THEN 4 WHEN 'Friday' THEN 5 ELSE 6 END,t.start_time").all(req.user.institution_id,req.user.id);else if(req.user.institution_role==="teacher")rows=db.prepare(sql+" WHERE c.institution_id=? AND (c.teacher_id=? OR t.subject_id IN (SELECT id FROM subjects WHERE teacher_id=?)) ORDER BY t.day,t.start_time").all(req.user.institution_id,req.user.id,req.user.id);else rows=db.prepare(sql+" WHERE c.institution_id=? ORDER BY t.day,t.start_time").all(req.user.institution_id);res.json(rows);});
 
-const upload=multer({storage:multer.diskStorage({destination:UPLOADS,filename:(req,file,cb)=>cb(null,Date.now()+"-"+file.originalname.replace(/[^a-zA-Z0-9._-]/g,"_"))}),limits:{fileSize:10*1024*1024}});
+const upload=multer({storage:storage.multerStorage(),limits:{fileSize:10*1024*1024}});
 app.post("/api/materials",auth,roles("admin","teacher"),upload.single("file"),(req,res)=>{
   const c=classForUser(req.user,req.body.class_id);if(!c)return res.status(403).json({error:"Not allowed"});
   const file=req.file?"/uploads/"+req.file.filename:"";
@@ -495,8 +495,8 @@ app.get("/api/materials/:id/file",auth,(req,res)=>{
   if(!material||!material.file_url) return res.status(404).json({error:"File not found"});
   if(!classForUser(req.user,material.class_id)) return res.status(404).json({error:"File not found"});
   const filename=path.basename(material.file_url);
-  const filePath=path.join(UPLOADS,filename);
-  if(!fs.existsSync(filePath)) return res.status(404).json({error:"File not found"});
+  const filePath=storage.resolveStoredFile(filename);
+  if(!filePath || !storage.exists(filename)) return res.status(404).json({error:"File not found"});
   res.sendFile(filePath);
 });
 app.get("/api/materials",auth,(req,res)=>{let sql="SELECT m.*,c.name class_name,u.name teacher_name FROM materials m LEFT JOIN classes c ON c.id=m.class_id LEFT JOIN users u ON u.id=m.teacher_id";let rows;if(req.user.institution_role==="student")rows=db.prepare(sql+" JOIN enrollments e ON e.class_id=m.class_id WHERE c.institution_id=? AND e.student_id=? ORDER BY m.id DESC").all(req.user.institution_id,req.user.id);else if(req.user.institution_role==="teacher")rows=db.prepare(sql+" WHERE c.institution_id=? AND (m.teacher_id=? OR c.teacher_id=?) ORDER BY m.id DESC").all(req.user.institution_id,req.user.id,req.user.id);else rows=db.prepare(sql+" WHERE c.institution_id=? ORDER BY m.id DESC").all(req.user.institution_id);res.json(rows);});
