@@ -6,7 +6,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "migrate:tenant": "node migrations/001_multi_tenant_foundation.js"
+    "migrate:tenant": "node migrations/001_multi_tenant_foundation.js",
+    "migrate:settings": "node migrations/002_institution_settings.js",
+    "migrate:all": "node migrations/001_multi_tenant_foundation.js && node migrations/002_institution_settings.js && node migrations/003_institution_communications.js",
+    "check": "node --check server.js && node --check migrations/001_multi_tenant_foundation.js && node --check migrations/002_institution_settings.js && node --check migrations/003_institution_communications.js && node --check ../frontend/app.js",
+    "migrate:communications": "node migrations/003_institution_communications.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -15,7 +19,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.0.2",
     "helmet": "^8.1.0",
     "express-rate-limit": "^7.5.0"
   }
