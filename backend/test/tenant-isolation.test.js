@@ -68,6 +68,8 @@ async function login(email) {
   });
   assert.equal(result.status, 200, JSON.stringify(result.body));
   assert.equal(result.body.must_change_password, true, "new school administrators must change their initial password");
+  const claims = JSON.parse(Buffer.from(result.body.token.split(".")[1], "base64url").toString("utf8"));
+  assert.equal(claims.exp - claims.iat, 8 * 60 * 60, "access tokens expire after an eight-hour session");
   const blocked = await request("/api/dashboard", { token: result.body.token });
   assert.equal(blocked.status, 403, "temporary-password accounts cannot access protected APIs");
   assert.equal(blocked.body.mustChangePassword, true);
