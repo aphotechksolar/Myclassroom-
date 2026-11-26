@@ -20,6 +20,7 @@ const { createGradebookRepository } = require("./repositories/gradebook");
 const { createReportCardRepository } = require("./repositories/report-cards");
 const { createGuardianRepository } = require("./repositories/guardians");
 const { createAuditRepository } = require("./repositories/audit");
+const { createAdminMembershipRepository } = require("./repositories/admin-memberships");
 const { createPerformanceRepository } = require("./repositories/performance");
 const { createRankingsRepository } = require("./repositories/rankings");
 const { createStorage } = require("./storage");
@@ -109,6 +110,7 @@ const gradebookRepository = createGradebookRepository(asyncDb);
 const reportCardRepository = createReportCardRepository(asyncDb);
 const guardianRepository = createGuardianRepository(asyncDb);
 const auditRepository = createAuditRepository(asyncDb);
+const adminMembershipRepository = createAdminMembershipRepository(asyncDb);
 const performanceRepository = createPerformanceRepository(asyncDb);
 const rankingsRepository = createRankingsRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
@@ -642,12 +644,17 @@ app.patch("/api/admin/users/:id",auth,roles("admin"),(req,res)=>{
   if(role) db.prepare("UPDATE institution_memberships SET role=? WHERE institution_id=? AND user_id=?").run(role==="admin"?"school_admin":role,req.user.institution_id,u.id);
   log(req.user.id,"Updated user",String(u.id),req.user.institution_id); res.json({ok:true});
 });
-app.delete("/api/admin/users/:id",auth,roles("admin"),(req,res)=>{
+app.delete("/api/admin/users/:id",auth,roles("admin"),async(req,res,next)=>{
   if(Number(req.params.id)===req.user.id) return res.status(400).json({error:"You cannot delete yourself"});
-  const target=db.prepare("SELECT user_id FROM institution_memberships WHERE institution_id=? AND user_id=?").get(req.user.institution_id,req.params.id);
-  if(!target) return res.status(404).json({error:"User not found in this school"});
-  db.prepare("DELETE FROM institution_memberships WHERE institution_id=? AND user_id=?").run(req.user.institution_id,req.params.id);
-  log(req.user.id,"Removed school membership",String(req.params.id),req.user.institution_id); res.json({ok:true});
+  try {
+    const removed=await adminMembershipRepository.removeFromInstitution(req.user.institution_id,req.params.id);
+    if(!removed) return res.status(404).json({error:"User not found in this school"});
+    log(req.user.id,"Removed school membership",String(req.params.id),req.user.institution_id);
+    res.json({ok:true});
+  } catch(error) {
+    if(error instanceof TypeError) return res.status(400).json({error:error.message});
+    next(error);
+  }
 });
 app.get("/api/audit",auth,roles("admin"),async(req,res,next)=>{
   try {
