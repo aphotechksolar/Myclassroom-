@@ -7,6 +7,7 @@ const { createDatabase } = require("./db");
 const { openAsyncSqliteDatabase } = require("./db/sqlite-async");
 const { createSettingsRepository } = require("./repositories/settings");
 const { createNotificationsRepository } = require("./repositories/notifications");
+const { createAnnouncementsRepository } = require("./repositories/announcements");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const helmet = require("helmet");
@@ -42,6 +43,7 @@ const db = createDatabase(path.join(DATA, "myclassroom.db"));
 const asyncDb = openAsyncSqliteDatabase(db);
 const settingsRepository = createSettingsRepository(asyncDb);
 const notificationsRepository = createNotificationsRepository(asyncDb);
+const announcementsRepository = createAnnouncementsRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -580,7 +582,7 @@ app.get("/api/attendance/:classId",auth,(req,res)=>{if(!classForUser(req.user,re
 app.get("/api/attendance-summary/:classId",auth,(req,res)=>{if(!classForUser(req.user,req.params.classId))return res.status(403).json({error:"Not allowed"});res.json(db.prepare(`SELECT u.id,u.name,COUNT(att.id) total,SUM(CASE WHEN att.status='present' THEN 1 ELSE 0 END) present,SUM(CASE WHEN att.status='absent' THEN 1 ELSE 0 END) absent,SUM(CASE WHEN att.status='late' THEN 1 ELSE 0 END) late FROM users u JOIN enrollments e ON e.student_id=u.id LEFT JOIN attendance att ON att.student_id=u.id AND att.class_id=e.class_id WHERE e.class_id=? GROUP BY u.id ORDER BY u.name`).all(req.params.classId));});
 
 app.post("/api/announcements",auth,roles("admin","teacher"),(req,res)=>{const c=req.body.class_id?classForUser(req.user,req.body.class_id):null;if(req.body.class_id&&!c)return res.status(403).json({error:"Not allowed"});const r=db.prepare("INSERT INTO announcements(title,body,class_id,author_id,institution_id) VALUES(?,?,?,?,?)").run(req.body.title,req.body.body,req.body.class_id||null,req.user.id,req.user.institution_id);const targets=req.body.class_id?db.prepare("SELECT e.student_id FROM enrollments e JOIN classes c ON c.id=e.class_id WHERE e.class_id=? AND c.institution_id=?").all(req.body.class_id,req.user.institution_id).map(x=>x.student_id):db.prepare("SELECT m.user_id id FROM institution_memberships m WHERE m.institution_id=? AND m.role='student' AND m.status='active'").all(req.user.institution_id).map(x=>x.id);targets.forEach(id=>notify(id,req.body.title,req.body.body,req.user.institution_id));res.json({id:r.lastInsertRowid});});
-app.get("/api/announcements",auth,(req,res)=>{const rows=req.user.institution_role==="student"?db.prepare(`SELECT a.*,c.name class_name,u.name author_name FROM announcements a LEFT JOIN classes c ON c.id=a.class_id LEFT JOIN users u ON u.id=a.author_id LEFT JOIN enrollments e ON e.class_id=a.class_id WHERE a.institution_id=? AND (a.class_id IS NULL OR e.student_id=?) ORDER BY a.id DESC`).all(req.user.institution_id,req.user.id):db.prepare(`SELECT a.*,c.name class_name,u.name author_name FROM announcements a LEFT JOIN classes c ON c.id=a.class_id LEFT JOIN users u ON u.id=a.author_id WHERE a.institution_id=? ORDER BY a.id DESC`).all(req.user.institution_id);res.json(rows);});
+app.get("/api/announcements",auth,async(req,res,next)=>{try{const rows=await announcementsRepository.listForUser(req.user.id,req.user.institution_id,req.user.institution_role==="student");res.json(rows);}catch(error){next(error);}});
 app.get("/api/notifications",auth,async(req,res,next)=>{
   try {
     const rows = await notificationsRepository.listForUser(req.user.id, req.user.institution_id);
