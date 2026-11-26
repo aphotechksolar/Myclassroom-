@@ -289,28 +289,33 @@ app.get("/api/audit",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT 
 
 app.get("/api/classes",auth,(req,res)=>{
   let rows;
-  if(req.user.role==="admin") rows=db.prepare("SELECT c.*,u.name teacher_name,(SELECT COUNT(*) FROM enrollments e WHERE e.class_id=c.id) student_count FROM classes c LEFT JOIN users u ON u.id=c.teacher_id ORDER BY c.name").all();
-  else if(req.user.role==="teacher") rows=db.prepare("SELECT c.*,u.name teacher_name,(SELECT COUNT(*) FROM enrollments e WHERE e.class_id=c.id) student_count FROM classes c LEFT JOIN users u ON u.id=c.teacher_id WHERE c.teacher_id=? ORDER BY c.name").all(req.user.id);
-  else rows=db.prepare("SELECT c.*,u.name teacher_name FROM classes c JOIN enrollments e ON e.class_id=c.id LEFT JOIN users u ON u.id=c.teacher_id WHERE e.student_id=? ORDER BY c.name").all(req.user.id);
+  if(req.user.institution_role==="school_admin") rows=db.prepare("SELECT c.*,u.name teacher_name,(SELECT COUNT(*) FROM enrollments e WHERE e.class_id=c.id) student_count FROM classes c LEFT JOIN users u ON u.id=c.teacher_id WHERE c.institution_id=? ORDER BY c.name").all(req.user.institution_id);
+  else if(req.user.institution_role==="teacher") rows=db.prepare("SELECT c.*,u.name teacher_name,(SELECT COUNT(*) FROM enrollments e WHERE e.class_id=c.id) student_count FROM classes c LEFT JOIN users u ON u.id=c.teacher_id WHERE c.institution_id=? AND c.teacher_id=? ORDER BY c.name").all(req.user.institution_id,req.user.id);
+  else rows=db.prepare("SELECT c.*,u.name teacher_name FROM classes c JOIN enrollments e ON e.class_id=c.id LEFT JOIN users u ON u.id=c.teacher_id WHERE c.institution_id=? AND e.student_id=? ORDER BY c.name").all(req.user.institution_id,req.user.id);
   res.json(rows);
 });
 app.post("/api/classes",auth,roles("admin","teacher"),(req,res)=>{
   const code=(req.body.code||("MC"+Math.random().toString(36).slice(2,8))).toUpperCase();
-  try{const r=db.prepare("INSERT INTO classes(name,code,description,teacher_id,live_link) VALUES(?,?,?,?,?)").run(req.body.name,code,req.body.description||"",req.user.role==="teacher"?req.user.id:(req.body.teacher_id||null),req.body.live_link||""); log(req.user.id,"Created class",String(r.lastInsertRowid)); res.json(db.prepare("SELECT * FROM classes WHERE id=?").get(r.lastInsertRowid));}catch(e){res.status(400).json({error:"Class code must be unique"});}
+  try{
+    const teacherId=req.user.institution_role==="teacher"?req.user.id:(req.body.teacher_id||null);
+    if(teacherId && !db.prepare("SELECT 1 FROM institution_memberships WHERE institution_id=? AND user_id=? AND role='teacher' AND status='active'").get(req.user.institution_id,teacherId)) return res.status(400).json({error:"Teacher must belong to this school"});
+    const r=db.prepare("INSERT INTO classes(name,code,description,teacher_id,live_link,institution_id) VALUES(?,?,?,?,?,?)").run(req.body.name,code,req.body.description||"",teacherId,req.body.live_link||"",req.user.institution_id);
+    log(req.user.id,"Created class",String(r.lastInsertRowid)); res.json(db.prepare("SELECT * FROM classes WHERE id=? AND institution_id=?").get(r.lastInsertRowid,req.user.institution_id));
+  }catch(e){res.status(400).json({error:"Class code must be unique"});}
 });
 app.patch("/api/classes/:id",auth,roles("admin","teacher"),(req,res)=>{
-  const c=db.prepare("SELECT * FROM classes WHERE id=?").get(req.params.id); if(!c) return res.status(404).json({error:"Not found"});
+  const c=db.prepare("SELECT * FROM classes WHERE id=? AND institution_id=?").get(req.params.id,req.user.institution_id); if(!c) return res.status(404).json({error:"Not found"});
   if(req.user.role==="teacher"&&c.teacher_id!==req.user.id) return res.status(403).json({error:"Not your class"});
   db.prepare("UPDATE classes SET name=?,description=?,live_link=?,teacher_id=? WHERE id=?").run(req.body.name??c.name,req.body.description??c.description,req.body.live_link??c.live_link,req.user.role==="admin"?(req.body.teacher_id??c.teacher_id):c.teacher_id,c.id);
   res.json(db.prepare("SELECT * FROM classes WHERE id=?").get(c.id));
 });
 app.delete("/api/classes/:id",auth,roles("admin","teacher"),(req,res)=>{
-  const c=db.prepare("SELECT * FROM classes WHERE id=?").get(req.params.id); if(!c) return res.status(404).json({error:"Not found"});
+  const c=db.prepare("SELECT * FROM classes WHERE id=? AND institution_id=?").get(req.params.id,req.user.institution_id); if(!c) return res.status(404).json({error:"Not found"});
   if(req.user.role==="teacher"&&c.teacher_id!==req.user.id) return res.status(403).json({error:"Not your class"});
   db.prepare("DELETE FROM classes WHERE id=?").run(c.id); log(req.user.id,"Deleted class",String(c.id)); res.json({ok:true});
 });
 app.post("/api/classes/join",auth,roles("student"),(req,res)=>{
-  const c=db.prepare("SELECT * FROM classes WHERE code=?").get(String(req.body.code||"").toUpperCase());
+  const c=db.prepare("SELECT * FROM classes WHERE code=? AND institution_id=?").get(String(req.body.code||"").toUpperCase(),req.user.institution_id);
   if(!c) return res.status(404).json({error:"Class code not found"});
   db.prepare("INSERT OR IGNORE INTO enrollments(class_id,student_id) VALUES(?,?)").run(c.id,req.user.id); notify(c.teacher_id,"New student joined",db.prepare("SELECT name FROM users WHERE id=?").get(req.user.id).name+" joined "+c.name); res.json(c);
 });
@@ -319,10 +324,10 @@ app.get("/api/classes/:id/students",auth,(req,res)=>{
   res.json(db.prepare("SELECT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN enrollments e ON e.student_id=u.id WHERE e.class_id=? ORDER BY u.name").all(req.params.id));
 });
 app.get("/api/students",auth,roles("admin","teacher"),(req,res)=>{
-  const rows=req.user.role==="admin"?db.prepare("SELECT id,name,email,phone,bio FROM users WHERE role='student' ORDER BY name").all():db.prepare("SELECT DISTINCT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN enrollments e ON e.student_id=u.id JOIN classes c ON c.id=e.class_id WHERE c.teacher_id=? ORDER BY u.name").all(req.user.id);
+  const rows=req.user.institution_role==="school_admin"?db.prepare("SELECT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE m.institution_id=? AND m.role='student' AND m.status='active' ORDER BY u.name").all(req.user.institution_id):db.prepare("SELECT DISTINCT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN institution_memberships m ON m.user_id=u.id JOIN enrollments e ON e.student_id=u.id JOIN classes c ON c.id=e.class_id WHERE m.institution_id=? AND m.status='active' AND c.institution_id=? AND c.teacher_id=? ORDER BY u.name").all(req.user.institution_id,req.user.institution_id,req.user.id);
   res.json(rows);
 });
-app.get("/api/teachers",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT id,name,email,phone,bio FROM users WHERE role='teacher' ORDER BY name").all()));
+app.get("/api/teachers",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE m.institution_id=? AND m.role='teacher' AND m.status='active' ORDER BY u.name").all(req.user.institution_id)));
 
 app.post("/api/subjects",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id); if(!c)return res.status(403).json({error:"Not allowed"}); const r=db.prepare("INSERT INTO subjects(name,class_id,teacher_id) VALUES(?,?,?)").run(req.body.name,c.id,req.user.id); res.json(db.prepare("SELECT * FROM subjects WHERE id=?").get(r.lastInsertRowid));});
 app.get("/api/subjects",auth,(req,res)=>{const rows=req.user.role==="student"?db.prepare("SELECT s.*,c.name class_name FROM subjects s LEFT JOIN classes c ON c.id=s.class_id JOIN enrollments e ON e.class_id=s.class_id WHERE e.student_id=?").all(req.user.id):req.user.role==="teacher"?db.prepare("SELECT s.*,c.name class_name FROM subjects s LEFT JOIN classes c ON c.id=s.class_id WHERE s.teacher_id=? OR c.teacher_id=?").all(req.user.id,req.user.id):db.prepare("SELECT s.*,c.name class_name FROM subjects s LEFT JOIN classes c ON c.id=s.class_id").all(); res.json(rows);});
