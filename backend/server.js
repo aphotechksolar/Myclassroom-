@@ -269,6 +269,78 @@ function normalizeQuestions(raw){
   })).filter(q=>q.options.length>=2 && q.answer>=0 && q.answer<q.options.length);
 }
 
+
+// Platform-owner operations use a separate high-entropy secret. This is an
+// operational bootstrap API; never expose the secret in browser-side code.
+db.exec(\`
+CREATE TABLE IF NOT EXISTS platform_audit_log(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ action TEXT NOT NULL,
+ institution_id TEXT,
+ details TEXT DEFAULT '',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+\`);
+function platformOwner(req,res,next){
+ const expected=String(process.env.PLATFORM_OWNER_KEY||"");
+ const supplied=String(req.get("x-platform-owner-key")||"");
+ if(expected.length<32) return res.status(503).json({error:"Platform-owner API is not configured. Set a 32+ character PLATFORM_OWNER_KEY."});
+ const a=Buffer.from(expected), b=Buffer.from(supplied);
+ if(a.length!==b.length || !require("crypto").timingSafeEqual(a,b)) return res.status(401).json({error:"Not authorized"});
+ next();
+}
+const platformLimiter=rateLimit({windowMs:15*60*1000,max:30,standardHeaders:true,legacyHeaders:false});
+app.use("/api/platform",platformLimiter);
+app.get("/api/platform/institutions",platformOwner,(req,res)=>{
+ const rows=db.prepare(\`SELECT i.id,i.name,i.slug,i.institution_type,i.country_code,i.timezone,i.currency_code,i.status,i.created_at,
+ (SELECT COUNT(*) FROM institution_memberships m WHERE m.institution_id=i.id AND m.status='active') active_members
+ FROM institutions i ORDER BY i.created_at DESC\`).all();
+ res.json(rows);
+});
+app.post("/api/platform/institutions",platformOwner,(req,res)=>{
+ const name=String(req.body.name||"").trim();
+ const slug=String(req.body.slug||"").trim().toLowerCase();
+ const type=String(req.body.institution_type||"combined");
+ const country=String(req.body.country_code||"NG").trim().toUpperCase();
+ const timezone=String(req.body.timezone||"Africa/Lagos").trim();
+ const currency=String(req.body.currency_code||"NGN").trim().toUpperCase();
+ const adminName=String(req.body.admin_name||"").trim();
+ const email=String(req.body.admin_email||"").trim().toLowerCase();
+ const password=String(req.body.admin_password||"");
+ if(name.length<2||name.length>120) return res.status(400).json({error:"Institution name must be 2-120 characters"});
+ if(!/^[a-z0-9](?:[a-z0-9-]{1,58}[a-z0-9])$/.test(slug)) return res.status(400).json({error:"Use a unique slug with 3-60 lowercase letters, numbers or hyphens"});
+ if(!["primary","secondary","tertiary","combined","other"].includes(type)) return res.status(400).json({error:"Invalid institution type"});
+ if(!/^[A-Z]{2}$/.test(country)||!/^[A-Z]{3}$/.test(currency)||timezone.length<3||timezone.length>80) return res.status(400).json({error:"Invalid country, timezone or currency settings"});
+ if(adminName.length<2||adminName.length>120||! /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({error:"A valid school administrator name and email are required"});
+ if(password.length<12||password.length>128) return res.status(400).json({error:"Initial administrator password must be 12-128 characters"});
+ const id=require("crypto").randomUUID();
+ try {
+  const create=db.transaction(()=>{
+   const user=db.prepare("INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,'admin')").run(adminName,email,bcrypt.hashSync(password,12));
+   db.prepare("INSERT INTO institutions(id,name,slug,institution_type,country_code,timezone,currency_code,status) VALUES(?,?,?,?,?,?,?,'active')").run(id,name,slug,type,country,timezone,currency);
+   db.prepare("INSERT INTO institution_memberships(institution_id,user_id,role,status) VALUES(?,?,'school_admin','active')").run(id,user.lastInsertRowid);
+   db.prepare("INSERT INTO institution_settings(institution_id,key,value) VALUES(?,?,?)").run(id,"school_name",name);
+   db.prepare("INSERT INTO platform_audit_log(action,institution_id,details) VALUES('institution_created',?,?)").run(id,JSON.stringify({slug,admin_email:email}));
+   return user.lastInsertRowid;
+  });
+  const adminUserId=create();
+  res.status(201).json({institution:{id,name,slug,institution_type:type,country_code:country,timezone,currency_code:currency,status:"active"},administrator:{id:adminUserId,name:adminName,email,role:"school_admin"}});
+ } catch(e) {
+  if(String(e.message).includes("UNIQUE")) return res.status(409).json({error:"The institution slug or administrator email is already in use"});
+  console.error("Platform institution creation failed",e);
+  return res.status(500).json({error:"Could not create institution"});
+ }
+});
+app.patch("/api/platform/institutions/:id/status",platformOwner,(req,res)=>{
+ const status=String(req.body.status||"");
+ if(!["active","suspended","pending"].includes(status)) return res.status(400).json({error:"Status must be active, suspended or pending"});
+ if(req.params.id==="legacy-school" && status!=="active") return res.status(400).json({error:"The legacy institution cannot be suspended through this endpoint"});
+ const result=db.prepare("UPDATE institutions SET status=? WHERE id=?").run(status,req.params.id);
+ if(!result.changes) return res.status(404).json({error:"Institution not found"});
+ db.prepare("INSERT INTO platform_audit_log(action,institution_id,details) VALUES('institution_status_changed',?,?)").run(req.params.id,JSON.stringify({status}));
+ res.json({ok:true,id:req.params.id,status});
+});
+
 app.post("/api/auth/register",(req,res)=>{
   const {name,email,password,role="student"}=req.body;
   if(!name||!email||!password) return res.status(400).json({error:"Name, email and password are required"});
