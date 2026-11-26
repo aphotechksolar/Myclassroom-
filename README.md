@@ -1,68 +1,74 @@
-# MyClassroom V12
+# MyClassroom
 
-A more complete full-stack starter for an online classroom and school-management platform.
+MyClassroom is a multi-school learning and school-management platform. It is being developed as a product that can be configured and operated by multiple independent schools, rather than as a single school's website.
 
-## Included
-- Admin, Teacher and Student portals
-- Authentication, password change and reset-token architecture
-- User/profile management
-- Classes, enrolment codes and rosters
-- Subjects and timetable
-- Learning materials with optional local file upload
-- Assignments and teacher grading
-- Visual quiz/examination builder
-- Server-side timed assessment attempts and automatic marking
-- Results, gradebook, rankings and performance summaries
-- Attendance marking with existing statuses loaded
-- Notifications and announcements
-- Teacher/student messaging
-- Live-class links and scheduled live classes
-- Print-ready report cards
-- CSV gradebook export
-- Admin school settings and audit log
-- Responsive mobile-first interface
+## Current capabilities
 
-## Run
-1. Install Node.js 18+.
-2. Open a terminal in `backend`.
-3. Run `npm install`.
-4. Copy `.env.example` to `.env` and change the secret.
-5. Run `npm start`.
-6. Open `http://localhost:3000`.
+- Platform Owner console for institution creation, suspension and reactivation.
+- Institution-scoped school administrator, teacher, student and verified parent/guardian access.
+- Multi-school login selection for accounts with memberships in more than one school.
+- School-created accounts with mandatory first-login password change.
+- Classes, enrolment, subjects and timetables.
+- Learning materials, assignments, submissions and teacher grading.
+- Timed quizzes and examinations with server-side deadlines, autosaved answers and automatic marking.
+- Attendance, results, gradebook, rankings and report cards.
+- School announcements, notifications and institution-scoped messaging.
+- Guardian invitations, revocation and read-only access to linked children's school progress.
+- Responsive student, parent and school administration experiences.
 
-The backend serves the frontend, so one server is enough for local development.
+## Local development
 
-## Important production notes
-This is a deployable starter, not a hosted service. For production use HTTPS, PostgreSQL, a strong secret, secure HTTP-only cookie authentication, rate limiting, validation, backups, email delivery for password recovery, object storage/CDN for uploads, malware scanning, logging/monitoring and a real video provider such as Zoom, Google Meet, Microsoft Teams, Jitsi or WebRTC infrastructure.
-
-Local uploads are intended for development. Password recovery email delivery is not configured; users must contact their school administrator.
-
-The report card is print-ready HTML and can be saved as PDF from the browser print dialog.
-
-## Multi-school foundation migration (development only)
-
-The tenant database migrations are available as an explicit, ordered command:
+Requirements: Node.js 20 recommended (Node.js 18+ may work) and a working native build toolchain for `better-sqlite3`.
 
 ```bash
 cd backend
 npm install
-npm run migrate:all
+cp .env.example .env
+# Edit .env and set a unique local JWT_SECRET.
+npm run check
+npm test
+npm start
 ```
 
-The ordered migrations create institution and institution-membership tables, add institution references to existing class, announcement, audit and settings records, create institution-isolated settings storage, and scope notifications and messages to an institution. Existing single-school communication records are assigned to `legacy-school`. Migrations are idempotent and record their versions in `schema_migrations`. The server also ensures the required schema exists at startup for existing installations.
+Open [http://localhost:3000](http://localhost:3000). The Express server serves the frontend and API from one process. Local SQLite data is stored in `backend/data` and uploaded learning files in `backend/uploads` unless the data-directory environment variables are overridden.
 
-**This is an early tenant-scoping implementation, not production certification.** Do not onboard a second school or expose real school data until the API changes, role flows, deployment, and cross-institution isolation tests have been independently tested and reviewed. Back up the SQLite database before running migrations on any database containing data. Existing local demo data is assigned to `legacy-school`.
+## Multi-school development notes
 
-## Platform owner console (early access)
+- Each account's active institution membership determines the school context for API access.
+- A user with multiple active school memberships must select the intended school at login.
+- The Platform Owner console is available at `/platform-owner`. Set `PLATFORM_OWNER_KEY` to a unique secret of at least 32 characters; never commit it or expose it in frontend code.
+- School administrators create teacher/student accounts and issue guardian invitations from the People area.
+- Guardian relationships must be verified by the school before an invitation is issued. The one-time invitation token is shown only once and must be shared privately.
+- Run database migrations only against a backed-up development database. The existing SQLite database is the supported development database.
 
-The platform owner console is available at `/platform-owner`. It uses a separate server-side secret and is not tied to a school administrator account.
+## Important deployment status
 
-Before using it, configure `PLATFORM_OWNER_KEY` as a randomly generated secret of at least 32 characters in the backend environment. Do not commit the key or put it in frontend source. The console sends it in an HTTPS request header; keep the page restricted to trusted operators and rotate the key immediately if exposed.
+**MyClassroom is not yet certified or approved for onboarding live schools.** The current backend still uses SQLite and local disk storage. The asynchronous database interface is an incremental migration seam, not a PostgreSQL implementation. The storage interface currently has only a local provider. Do not deploy this version to a serverless platform or a multi-instance environment where local files may be ephemeral or unavailable to other instances.
 
-The console currently supports:
-- Listing institutions and active member counts.
-- Creating an institution with country, timezone and currency settings.
-- Creating its first school administrator in the same database transaction.
-- Suspending and reactivating an institution (the original `legacy-school` is protected).
+Before a real-school launch, complete and verify all launch gates in [the production go-live checklist](docs/GO-LIVE-CHECKLIST.md). In particular:
 
-The initial administrator password is supplied during creation and is never returned by the API. Share it through a secure channel and require the administrator to change it after first sign-in. This is an early operational console, not yet a full subscription/billing system or an invitation/email workflow. Do not onboard live schools until cross-tenant API integration tests, deployment storage/database readiness and security review are complete.
+1. Implement and test a PostgreSQL adapter and production migrations.
+2. Implement private object storage with authenticated, short-lived downloads.
+3. Replace browser local-storage bearer-token handling with a reviewed secure session design.
+4. Configure and test password recovery email delivery and operational email.
+5. Review upload content validation, malware scanning, backup/restore and retention.
+6. Complete a full authorization and cross-tenant security review, including every remaining synchronous SQL route.
+7. Complete accessibility, mobile-browser and end-to-end acceptance testing.
+8. Configure production monitoring, alerting, incident response and school support.
+9. Run a controlled staging pilot and obtain explicit release approval.
+
+A single persistent Node.js instance with durable disk may be used for isolated development or staging only, with backups and no real student data. Vercel/serverless and horizontally scaled deployments are not supported by the current SQLite/local-storage implementation.
+
+## Environment configuration
+
+Copy `backend/.env.example` to `backend/.env` for local setup. Production secrets must be generated and stored in the hosting provider's secret manager. Never commit `.env`, JWT secrets, Platform Owner keys, passwords, invitation tokens or student data.
+
+## Tests
+
+```bash
+cd backend
+npm run check
+npm test
+```
+
+The automated tests cover important repository contracts, runtime API flows, role authorization and tenant-isolation cases. Passing these tests is necessary but not sufficient for production readiness; see the go-live checklist.
