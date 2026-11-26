@@ -136,6 +136,46 @@ CREATE TABLE IF NOT EXISTS audit_log(
 );
 `);
 
+// Ensure the tenant foundation exists before authentication and seed logic run.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS institutions (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
+    institution_type TEXT NOT NULL DEFAULT 'school',
+    country_code TEXT NOT NULL DEFAULT 'NG', timezone TEXT NOT NULL DEFAULT 'Africa/Lagos',
+    currency_code TEXT NOT NULL DEFAULT 'NGN', status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS institution_memberships (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, institution_id TEXT NOT NULL, user_id INTEGER NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('school_admin','teacher','student','parent')),
+    status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(institution_id,user_id),
+    FOREIGN KEY(institution_id) REFERENCES institutions(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS institution_settings (
+    institution_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(institution_id,key),
+    FOREIGN KEY(institution_id) REFERENCES institutions(id) ON DELETE CASCADE
+  );
+`);
+function ensureTenantColumn(table,column,definition){
+  const columns=db.prepare(`PRAGMA table_info(${table})`).all();
+  if(!columns.some(c=>c.name===column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+ensureTenantColumn("classes","institution_id","TEXT REFERENCES institutions(id)");
+ensureTenantColumn("announcements","institution_id","TEXT REFERENCES institutions(id)");
+ensureTenantColumn("audit_log","institution_id","TEXT REFERENCES institutions(id)");
+ensureTenantColumn("school_settings","institution_id","TEXT REFERENCES institutions(id)");
+db.prepare("INSERT OR IGNORE INTO institutions(id,name,slug,institution_type,country_code,timezone,currency_code) VALUES('legacy-school',?,'legacy-school','combined','NG','Africa/Lagos','NGN')")
+  .run(process.env.SCHOOL_NAME || "MyClassroom Academy");
+db.prepare("UPDATE classes SET institution_id='legacy-school' WHERE institution_id IS NULL").run();
+db.prepare("UPDATE announcements SET institution_id='legacy-school' WHERE institution_id IS NULL").run();
+db.prepare("UPDATE audit_log SET institution_id='legacy-school' WHERE institution_id IS NULL").run();
+db.prepare("UPDATE school_settings SET institution_id='legacy-school' WHERE institution_id IS NULL").run();
+db.prepare("INSERT OR IGNORE INTO institution_settings(institution_id,key,value) SELECT 'legacy-school',key,value FROM school_settings").run();
+
 const count = db.prepare("SELECT COUNT(*) c FROM users").get().c;
 if (!count && process.env.NODE_ENV === "production") {
   const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || "").trim().toLowerCase();
@@ -159,6 +199,17 @@ if (!count && process.env.NODE_ENV !== "production" && process.env.SEED_DEMO_DAT
   db.prepare("INSERT INTO subjects(name,class_id,teacher_id) VALUES(?,?,?)").run("Mathematics",cls.lastInsertRowid,teacher.lastInsertRowid);
   db.prepare("INSERT INTO school_settings(key,value) VALUES('school_name',?)").run(process.env.SCHOOL_NAME || "MyClassroom Academy");
 }
+
+// Preserve access for the existing single-school installation and newly seeded local accounts.
+db.prepare(`
+  INSERT OR IGNORE INTO institution_memberships(institution_id,user_id,role)
+  SELECT 'legacy-school',id,
+    CASE role WHEN 'admin' THEN 'school_admin' WHEN 'teacher' THEN 'teacher' ELSE 'student' END
+  FROM users
+`).run();
+db.prepare("UPDATE classes SET institution_id='legacy-school' WHERE institution_id IS NULL").run();
+db.prepare("UPDATE announcements SET institution_id='legacy-school' WHERE institution_id IS NULL").run();
+db.prepare("UPDATE audit_log SET institution_id='legacy-school' WHERE institution_id IS NULL").run();
 
 function activeMembership(userId, institutionId) {
   const sql = `SELECT m.institution_id,m.role,m.status,i.name institution_name,i.status institution_status
