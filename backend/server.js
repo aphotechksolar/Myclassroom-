@@ -25,7 +25,7 @@ fs.mkdirSync(UPLOADS, {recursive:true});
 const allowedOrigins = (process.env.CORS_ORIGINS || "").split(",").map(x => x.trim()).filter(Boolean);
 const corsOptions = { origin(origin, callback) {
   if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-  if (process.env.NODE_ENV !== "production" && /^https?:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(origin)) return callback(null, true);
+  if (process.env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
   return callback(new Error("Origin not allowed by CORS"));
 }};
 app.disable("x-powered-by");
