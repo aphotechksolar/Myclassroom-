@@ -18,6 +18,7 @@ const { createPeopleRepository } = require("./repositories/people");
 const { createAttendanceRepository } = require("./repositories/attendance");
 const { createGradebookRepository } = require("./repositories/gradebook");
 const { createReportCardRepository } = require("./repositories/report-cards");
+const { createGuardianRepository } = require("./repositories/guardians");
 const { createPerformanceRepository } = require("./repositories/performance");
 const { createRankingsRepository } = require("./repositories/rankings");
 const { createStorage } = require("./storage");
@@ -105,6 +106,7 @@ const peopleRepository = createPeopleRepository(asyncDb);
 const attendanceRepository = createAttendanceRepository(asyncDb);
 const gradebookRepository = createGradebookRepository(asyncDb);
 const reportCardRepository = createReportCardRepository(asyncDb);
+const guardianRepository = createGuardianRepository(asyncDb);
 const performanceRepository = createPerformanceRepository(asyncDb);
 const rankingsRepository = createRankingsRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
@@ -980,15 +982,15 @@ app.delete("/api/guardians/invitations/:id",auth,roles("admin"),(req,res)=>{
   log(req.user.id,"Cancelled guardian invitation",String(req.params.id),req.user.institution_id);
   res.json({ok:true});
 });
-app.get("/api/guardian/children",auth,(req,res)=>{
+app.get("/api/guardian/children",auth,async(req,res,next)=>{
   if(req.user.institution_role!=="parent") return res.status(403).json({error:"Parent access required."});
-  const children=db.prepare(`SELECT u.id,u.name,
-    (SELECT GROUP_CONCAT(c.name, ', ') FROM enrollments e JOIN classes c ON c.id=e.class_id WHERE e.student_id=u.id AND c.institution_id=?) class_names
-    FROM guardian_student_links l JOIN users u ON u.id=l.student_id
-    JOIN institution_memberships m ON m.user_id=u.id AND m.institution_id=l.institution_id AND m.role='student' AND m.status='active'
-    WHERE l.institution_id=? AND l.guardian_id=? AND l.status='verified' ORDER BY u.name`)
-    .all(req.user.institution_id,req.user.institution_id,req.user.id);
-  res.json(children);
+  try {
+    const children=await guardianRepository.listChildren(req.user.id,req.user.institution_id);
+    res.json(children);
+  } catch(error) {
+    if(error instanceof TypeError) return res.status(400).json({error:error.message});
+    next(error);
+  }
 });
 app.get("/api/guardian/children/:id/performance",auth,(req,res)=>{
   if(req.user.institution_role!=="parent") return res.status(403).json({error:"Parent access required."});
