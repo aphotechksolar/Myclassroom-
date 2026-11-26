@@ -291,3 +291,57 @@ test("resuming an active attempt never extends its original deadline", async () 
   } finally { await database.close(); }
 });
 
+test("answers autosave only for the enrolled student while the attempt is active", async () => {
+  const { database, repository } = setup();
+  try {
+    await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    const saved = await repository.saveAttemptAnswers({
+      userId: 101, institutionId: "school-a", assessmentId: 20, answers: { 0: 0, 1: 1, 99: 1, 1.5: 0, 0: 99 }
+    });
+    assert.equal(saved.ok, true);
+    const row = await database.one("SELECT answers_json FROM attempts WHERE assessment_id = $1 AND student_id = $2", [20, 101]);
+    assert.deepEqual(JSON.parse(row.answers_json), { 1: 1 });
+    await assert.rejects(
+      repository.saveAttemptAnswers({ userId: 102, institutionId: "school-a", assessmentId: 20, answers: { 0: 0 } }),
+      error => error.status === 400
+    );
+  } finally { await database.close(); }
+});
+
+test("timed-out attempts are graded from the last server-saved answers, not late client answers", async () => {
+  const { database, repository } = setup();
+  try {
+    const started = await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    await repository.saveAttemptAnswers({
+      userId: 101, institutionId: "school-a", assessmentId: 20, answers: { 0: 0, 1: 1 }
+    });
+    const past = new Date(Date.now() - 60_000).toISOString();
+    await database.execute("UPDATE attempts SET expires_at = $1 WHERE id = $2", [past, started.attempt.id]);
+    const result = await repository.submitAttempt({
+      userId: 101, institutionId: "school-a", assessmentId: 20, answers: { 0: 0, 1: 0 }
+    });
+    assert.equal(result.timed_out, true);
+    assert.equal(result.score, 1);
+    assert.equal(result.percentage, 50);
+    assert.deepEqual(JSON.parse(result.answers_json), { 0: 0, 1: 1 });
+  } finally { await database.close(); }
+});
+
+test("expiry sweep grades autosaved answers instead of discarding them", async () => {
+  const { database, repository } = setup();
+  try {
+    const started = await repository.startAttempt({ userId: 101, institutionId: "school-a", assessmentId: 20 });
+    await repository.saveAttemptAnswers({
+      userId: 101, institutionId: "school-a", assessmentId: 20, answers: { 0: 0, 1: 1 }
+    });
+    const past = new Date(Date.now() - 60_000).toISOString();
+    await database.execute("UPDATE attempts SET expires_at = $1 WHERE id = $2", [past, started.attempt.id]);
+    assert.equal(await repository.expireOverdueAttempts(), 1);
+    const result = await database.one("SELECT * FROM attempts WHERE id = $1", [started.attempt.id]);
+    assert.equal(result.score, 1);
+    assert.equal(result.percentage, 50);
+    assert.equal(result.status, "PASS");
+    assert.equal(result.submitted_at, past);
+  } finally { await database.close(); }
+});
+
