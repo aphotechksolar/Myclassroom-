@@ -240,7 +240,8 @@ function roles(...allowed){ return (req,res,next)=>{
 function sign(user,institutionId){
   const membership=activeMembership(user.id,institutionId);
   if(!membership) throw new Error("User has no active institution membership");
-  return jwt.sign({id:user.id,name:user.name,email:user.email,role:user.role,institution_id:membership.institution_id,institution_role:membership.role},SECRET,{expiresIn:"7d"});
+  const effectiveRole=membership.role==="school_admin"?"admin":membership.role;
+  return jwt.sign({id:user.id,name:user.name,email:user.email,role:effectiveRole,institution_id:membership.institution_id,institution_role:membership.role},SECRET,{expiresIn:"7d"});
 }
 function log(actor,action,details=""){ const m=activeMembership(actor); db.prepare("INSERT INTO audit_log(actor_id,action,details,institution_id) VALUES(?,?,?,?)").run(actor,action,details,m?.institution_id||null); }
 function notify(userId,title,body){ if(userId) db.prepare("INSERT INTO notifications(user_id,title,body) VALUES(?,?,?)").run(userId,title,body); }
@@ -337,7 +338,7 @@ app.patch("/api/admin/users/:id",auth,roles("admin"),(req,res)=>{
   const role=["admin","teacher","student"].includes(req.body.role)?req.body.role:null;
   const u=db.prepare("SELECT u.* FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE u.id=? AND m.institution_id=? AND m.status='active'").get(req.params.id,req.user.institution_id);
   if(!u) return res.status(404).json({error:"User not found in this school"});
-  db.prepare("UPDATE users SET name=?,role=?,phone=?,bio=? WHERE id=?").run(req.body.name??u.name,role||u.role,req.body.phone??u.phone,req.body.bio??u.bio,u.id);
+  db.prepare("UPDATE users SET name=?,phone=?,bio=? WHERE id=?").run(req.body.name??u.name,req.body.phone??u.phone,req.body.bio??u.bio,u.id);
   if(role) db.prepare("UPDATE institution_memberships SET role=? WHERE institution_id=? AND user_id=?").run(role==="admin"?"school_admin":role,req.user.institution_id,u.id);
   log(req.user.id,"Updated user",String(u.id)); res.json({ok:true});
 });
