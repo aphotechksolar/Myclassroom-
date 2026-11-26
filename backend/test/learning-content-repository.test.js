@@ -8,7 +8,7 @@ function setup() {
   const sqlite = createDatabase(":memory:");
   const database = openAsyncSqliteDatabase(sqlite);
   sqlite.exec(`
-    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);
     CREATE TABLE classes (
       id INTEGER PRIMARY KEY, name TEXT, teacher_id INTEGER, institution_id TEXT
     );
@@ -21,7 +21,16 @@ function setup() {
       id INTEGER PRIMARY KEY, title TEXT, description TEXT, due_date TEXT,
       class_id INTEGER, teacher_id INTEGER, max_score REAL, created_at TEXT
     );
-    INSERT INTO users VALUES (1, 'Teacher One'), (2, 'Teacher Two');
+    CREATE TABLE submissions (
+      id INTEGER PRIMARY KEY, assignment_id INTEGER, student_id INTEGER,
+      answer TEXT, score REAL, feedback TEXT, submitted_at TEXT
+    );
+    CREATE TABLE institution_memberships (
+      user_id INTEGER, institution_id TEXT, status TEXT
+    );
+    INSERT INTO users(id, name) VALUES
+      (1, 'Teacher One'), (2, 'Teacher Two'),
+      (101, 'Student One'), (102, 'Student Two'), (103, 'Inactive Student');
     INSERT INTO classes VALUES
       (10, 'A Biology', 1, 'school-a'),
       (11, 'A Chemistry', 2, 'school-a'),
@@ -35,6 +44,14 @@ function setup() {
       (1, 'A Biology Task', '', '2026-02-01', 10, 1, 100, '2026-01-01'),
       (2, 'A Chemistry Task', '', '2026-02-02', 11, 2, 100, '2026-01-02'),
       (3, 'B Biology Task', '', '2026-02-03', 12, 1, 100, '2026-01-03');
+    INSERT INTO institution_memberships VALUES
+      (101, 'school-a', 'active'), (102, 'school-a', 'active'),
+      (101, 'school-b', 'active'), (103, 'school-a', 'suspended');
+    INSERT INTO submissions VALUES
+      (1, 1, 101, 'Answer A1', NULL, '', '2026-02-01'),
+      (2, 2, 102, 'Answer A2', NULL, '', '2026-02-02'),
+      (3, 3, 101, 'Answer B1', NULL, '', '2026-02-03'),
+      (4, 1, 103, 'Suspended member', NULL, '', '2026-02-04');
   `);
   return { database, repository: createLearningContentRepository(database) };
 }
@@ -129,6 +146,37 @@ test("assignment creation is scoped to the institution and class teacher", async
     await assert.rejects(repository.createAssignment({
       userId: 101, institutionId: "school-a", role: "student", classId: 10, title: "Forbidden"
     }), /Only school admins and teachers/);
+  } finally {
+    await database.close();
+  }
+});
+
+
+test("submissions preserve student, teacher and admin visibility with active membership and school isolation", async () => {
+  const { database, repository } = setup();
+  try {
+    const student = await repository.listSubmissionsForUser(101, "school-a", "student");
+    assert.deepEqual(student.map(row => row.id), [1]);
+    assert.equal(student[0].student_name, "Student One");
+    assert.equal(student[0].title, "A Biology Task");
+
+    const teacher = await repository.listSubmissionsForUser(1, "school-a", "teacher");
+    assert.deepEqual(teacher.map(row => row.id), [1]);
+
+    const admin = await repository.listSubmissionsForUser(900, "school-a", "school_admin");
+    assert.deepEqual(admin.map(row => row.id), [2, 1]);
+    assert.ok(admin.every(row => row.id !== 3 && row.id !== 4));
+  } finally {
+    await database.close();
+  }
+});
+
+test("submissions repository rejects invalid authenticated scope", async () => {
+  const { database, repository } = setup();
+  try {
+    await assert.rejects(repository.listSubmissionsForUser(0, "school-a", "student"), /valid user ID/);
+    await assert.rejects(repository.listSubmissionsForUser(1, "", "teacher"), /valid institution ID/);
+    await assert.rejects(repository.listSubmissionsForUser(1, "school-a", "parent"), /valid institution role/);
   } finally {
     await database.close();
   }
