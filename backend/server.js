@@ -444,7 +444,26 @@ app.post("/api/auth/guardian/redeem",(req,res)=>{
 app.post("/api/auth/login",(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE email=?").get(String(req.body.email||"").trim().toLowerCase());
   if(!u||!bcrypt.compareSync(req.body.password||"",u.password_hash)) return res.status(401).json({error:"Invalid email or password"});
-  const membership=activeMembership(u.id,req.body.institution_id||null);
+  const memberships=db.prepare(`SELECT m.institution_id,m.role,i.name institution_name
+    FROM institution_memberships m JOIN institutions i ON i.id=m.institution_id
+    WHERE m.user_id=? AND m.status='active' AND i.status='active'
+      AND m.role IN ('school_admin','teacher','student','parent')
+    ORDER BY i.name,m.institution_id`).all(u.id);
+  const selectedInstitutionId=String(req.body.institution_id||"").trim();
+  if(!selectedInstitutionId && memberships.length>1) {
+    return res.status(409).json({
+      error:"Choose a school to continue.",
+      requiresInstitutionSelection:true,
+      institutions:memberships.map(({institution_id,name,institution_name,role})=>({
+        institution_id,
+        name:institution_name,
+        role
+      }))
+    });
+  }
+  const membership=selectedInstitutionId
+    ? memberships.find(item=>item.institution_id===selectedInstitutionId)
+    : memberships[0];
   if(!membership) return res.status(403).json({error:"This account has no active membership in the selected school."});
   res.json({user:{id:u.id,name:u.name,email:u.email,role:membership.role==="school_admin"?"admin":membership.role,phone:u.phone,bio:u.bio,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(u,membership.institution_id)});
 });
