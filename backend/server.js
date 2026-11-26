@@ -12,6 +12,7 @@ const { createMessagesRepository } = require("./repositories/messages");
 const { createClassesRepository } = require("./repositories/classes");
 const { createLearningContentRepository } = require("./repositories/learning-content");
 const { createSubmissionRepository } = require("./repositories/submissions");
+const { createAssessmentsRepository } = require("./repositories/assessments");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const helmet = require("helmet");
@@ -52,6 +53,7 @@ const messagesRepository = createMessagesRepository(asyncDb);
 const classesRepository = createClassesRepository(asyncDb);
 const learningContentRepository = createLearningContentRepository(asyncDb);
 const submissionRepository = createSubmissionRepository(asyncDb);
+const assessmentsRepository = createAssessmentsRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -557,7 +559,7 @@ app.patch("/api/submissions/:id/grade",auth,roles("admin","teacher"),async(req,r
 });
 
 app.post("/api/assessments",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id);if(!c)return res.status(403).json({error:"Not allowed"});let questions;try{questions=normalizeQuestions(req.body.questions);}catch(e){return res.status(400).json({error:e.message});}if(!questions.length)return res.status(400).json({error:"Add at least one valid question"});const r=db.prepare("INSERT INTO assessments(title,type,duration_minutes,class_id,teacher_id,pass_mark,questions_json) VALUES(?,?,?,?,?,?,?)").run(req.body.title,req.body.type||"quiz",Number(req.body.duration_minutes||20),c.id,req.user.id,Number(req.body.pass_mark||50),JSON.stringify(questions));db.prepare("SELECT student_id FROM enrollments WHERE class_id=?").all(c.id).forEach(s=>notify(s.student_id,"New assessment",req.body.title,req.user.institution_id));res.json({id:r.lastInsertRowid});});
-app.get("/api/assessments",auth,(req,res)=>{let sql="SELECT a.*,c.name class_name,u.name teacher_name FROM assessments a LEFT JOIN classes c ON c.id=a.class_id LEFT JOIN users u ON u.id=a.teacher_id";let rows;if(req.user.institution_role==="student")rows=db.prepare(sql+" JOIN enrollments e ON e.class_id=a.class_id WHERE c.institution_id=? AND e.student_id=? ORDER BY a.id DESC").all(req.user.institution_id,req.user.id);else if(req.user.institution_role==="teacher")rows=db.prepare(sql+" WHERE c.institution_id=? AND (a.teacher_id=? OR c.teacher_id=?) ORDER BY a.id DESC").all(req.user.institution_id,req.user.id,req.user.id);else rows=db.prepare(sql+" WHERE c.institution_id=? ORDER BY a.id DESC").all(req.user.institution_id);res.json(rows.map(x=>({...x,question_count:JSON.parse(x.questions_json).length})));});
+app.get("/api/assessments",auth,async(req,res,next)=>{try{const rows=await assessmentsRepository.listForUser(req.user.id,req.user.institution_id,req.user.institution_role);res.json(rows);}catch(error){next(error);}});
 app.post("/api/assessments/:id/start",auth,roles("student"),(req,res)=>{
   const a=db.prepare("SELECT * FROM assessments WHERE id=?").get(req.params.id);if(!a||!classForUser(req.user,a.class_id)||!db.prepare("SELECT 1 FROM enrollments WHERE class_id=? AND student_id=?").get(a.class_id,req.user.id))return res.status(403).json({error:"Not allowed"});
   const existing=db.prepare("SELECT * FROM attempts WHERE assessment_id=? AND student_id=?").get(a.id,req.user.id);
