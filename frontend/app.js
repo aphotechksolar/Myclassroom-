@@ -66,7 +66,7 @@ async function takeAssessment(id){
    if(remaining()<=0)return finish();
    $("#modal").innerHTML=`<div><div class="bar"><h2>Assessment</h2><b id="timer">${fmt(remaining())}</b></div>${qs.map((q,i)=>`<div class="qrow"><b>${i+1}. ${esc(q.question)}</b>${q.options.map((o,j)=>`<label style="font-weight:500"><input type="radio" name="q${i}" value="${j}" ${String(answers[i])===String(j)?"checked":""}> ${esc(o)}</label>`).join("")}</div>`).join("")}<button class="btn" id="finish">Submit assessment</button></div>`;
    $("#modal").classList.add("open");
-   qs.forEach((q,i)=>$(`input[name=q${i}]`).forEach(x=>x.onchange=()=>{answers[i]=Number(x.value);saveQueue=saveQueue.then(()=>api("/assessments/"+id+"/answers",{method:"PATCH",body:JSON.stringify({answers})})).catch(error=>{toast(error.message)});}));
+   qs.forEach((q,i)=>$$(`input[name=q${i}]`).forEach(x=>x.onchange=()=>{answers[i]=Number(x.value);saveQueue=saveQueue.then(()=>api("/assessments/"+id+"/answers",{method:"PATCH",body:JSON.stringify({answers})})).catch(error=>{toast(error.message)});}));
    $("#finish").onclick=finish;
  };
  const finish=async()=>{
