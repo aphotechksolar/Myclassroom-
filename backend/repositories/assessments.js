@@ -78,7 +78,100 @@ function createAssessmentsRepository(database) {
     });
   }
 
+
+  async function startAttempt(input) {
+    const id = validateScope(input.userId, input.institutionId, "student");
+    if (!Number.isSafeInteger(Number(input.assessmentId)) || Number(input.assessmentId) <= 0) {
+      throw new TypeError("A valid assessment ID is required");
+    }
+    return database.transaction(async (tx) => {
+      const assessment = await tx.one(
+        "SELECT a.id, a.duration_minutes, a.questions_json FROM assessments a JOIN classes c ON c.id = a.class_id JOIN enrollments e ON e.class_id = c.id AND e.student_id = $2 WHERE a.id = $1 AND c.institution_id = $3",
+        [Number(input.assessmentId), id, input.institutionId]
+      );
+      if (!assessment) {
+        const error = new Error("Not allowed");
+        error.status = 403;
+        throw error;
+      }
+      const existing = await tx.one(
+        "SELECT * FROM attempts WHERE assessment_id = $1 AND student_id = $2",
+        [assessment.id, id]
+      );
+      if (existing && existing.status === "submitted") {
+        const error = new Error("Assessment already submitted");
+        error.status = 400;
+        error.attempt = existing;
+        throw error;
+      }
+      let attempt = existing;
+      if (!attempt) {
+        const duration = Number(assessment.duration_minutes || 20);
+        const expiresAt = new Date(Date.now() + duration * 60000).toISOString();
+        const inserted = await tx.execute(
+          "INSERT INTO attempts(assessment_id, student_id, expires_at) VALUES($1, $2, $3)",
+          [assessment.id, id, expiresAt]
+        );
+        attempt = await tx.one("SELECT * FROM attempts WHERE id = $1", [inserted.insertId]);
+      }
+      let questions;
+      try { questions = JSON.parse(assessment.questions_json); }
+      catch { throw new Error("Assessment questions are unavailable"); }
+      return {
+        attempt,
+        questions: questions.map(question => ({
+          question: question.question,
+          options: question.options
+        }))
+      };
+    });
+  }
+
+  async function submitAttempt(input) {
+    const id = validateScope(input.userId, input.institutionId, "student");
+    if (!Number.isSafeInteger(Number(input.assessmentId)) || Number(input.assessmentId) <= 0) {
+      throw new TypeError("A valid assessment ID is required");
+    }
+    const answers = input.answers;
+    if (!answers || typeof answers !== "object" || Array.isArray(answers)) {
+      throw new TypeError("Answers must be an object");
+    }
+    return database.transaction(async (tx) => {
+      const assessment = await tx.one(
+        "SELECT a.id, a.pass_mark, a.questions_json FROM assessments a JOIN classes c ON c.id = a.class_id JOIN enrollments e ON e.class_id = c.id AND e.student_id = $2 WHERE a.id = $1 AND c.institution_id = $3",
+        [Number(input.assessmentId), id, input.institutionId]
+      );
+      const attempt = assessment && await tx.one(
+        "SELECT * FROM attempts WHERE assessment_id = $1 AND student_id = $2",
+        [assessment.id, id]
+      );
+      if (!assessment || !attempt) {
+        const error = new Error("Attempt not found");
+        error.status = 400;
+        throw error;
+      }
+      if (attempt.status === "submitted") return attempt;
+      let questions;
+      try { questions = JSON.parse(assessment.questions_json); }
+      catch { throw new Error("Assessment questions are unavailable"); }
+      let score = 0;
+      questions.forEach((question, index) => {
+        if (Object.prototype.hasOwnProperty.call(answers, index) &&
+            Number(answers[index]) === Number(question.answer)) score++;
+      });
+      const percentage = questions.length ? Math.round(score / questions.length * 100) : 0;
+      const status = percentage >= Number(assessment.pass_mark) ? "PASS" : "FAIL";
+      await tx.execute(
+        "UPDATE attempts SET submitted_at = CURRENT_TIMESTAMP, score = $1, percentage = $2, status = $3, answers_json = $4 WHERE id = $5 AND student_id = $6",
+        [score, percentage, status, JSON.stringify(answers), attempt.id, id]
+      );
+      return tx.one("SELECT * FROM attempts WHERE id = $1 AND student_id = $2", [attempt.id, id]);
+    });
+  }
+
   return Object.freeze({
+    async startAttempt(input) { return startAttempt(input); },
+    async submitAttempt(input) { return submitAttempt(input); },
     async createForClass(input) { return createForClass(input); },
 
     async listForUser(userId, institutionId, role) {
@@ -103,10 +196,14 @@ function createAssessmentsRepository(database) {
          ORDER BY a.id DESC`,
         params
       );
-      return rows.map(row => ({
-        ...row,
-        question_count: JSON.parse(row.questions_json).length
-      }));
+      return rows.map(row => {
+        const result = {
+          ...row,
+          question_count: JSON.parse(row.questions_json).length
+        };
+        if (role === "student") delete result.questions_json;
+        return result;
+      });
     }
   });
 }
