@@ -77,3 +77,20 @@ The CSRF token is not an authentication credential. Provide it through a same-or
 - Do not deploy or onboard real schools as part of this code change.
 - No Supabase project, PostgreSQL database, storage provider, production secret or hosting configuration is required for this session work.
 - Required acceptance: no authentication token in browser-readable storage or JSON responses; logout and password change revoke server-side sessions; cross-school and parent authorization tests still pass; cross-site state-changing requests fail; legitimate same-origin browser workflows pass.
+
+
+## Implementation status — PR #42
+
+The first browser-session integration is implemented on the PR branch:
+
+- Login, self-registration, guardian invitation redemption, school switching and password changes issue server-side sessions.
+- Production browser authentication uses the host-only __Host-mc_session HttpOnly/Secure cookie; local HTTP development uses mc_session.
+- CSRF protection is applied to unsafe authenticated requests. A same-origin POST refreshes the synchronizer token after page reload.
+- Logout revokes the current session. Password change and password reset revoke all active sessions for the user.
+- Active school membership, school suspension, first-login password-change restrictions and parent route restrictions are rechecked by the session authentication middleware.
+- The frontend no longer stores the authentication secret in sessionStorage and no longer attaches bearer tokens to API requests.
+- Automated integration fixtures retain a test-only bearer compatibility path; it is disabled outside NODE_ENV=test.
+
+Production configuration: set APP_ORIGIN to the exact public HTTPS origin (for example, https://school.example) or include that exact origin in CORS_ORIGINS. Do not use wildcard origins. Verify HTTPS termination and secure cookie forwarding before launch.
+
+This does not yet move sessions to PostgreSQL. The current session store uses the same SQLite database as the existing application and inherits its deployment limitations. The PR is not a production launch approval.

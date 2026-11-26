@@ -2,8 +2,8 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
 const { createDatabase } = require("./db");
+const { createSessionStore } = require("./auth/sessions");
 const { openAsyncSqliteDatabase } = require("./db/sqlite-async");
 const { createSettingsRepository } = require("./repositories/settings");
 const { createNotificationsRepository } = require("./repositories/notifications");
@@ -23,16 +23,14 @@ require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === "production" ? "" : "myclassroom-local-development-only");
-if (!SECRET) throw new Error("JWT_SECRET must be set to a strong random value in production.");
-if (process.env.NODE_ENV === "production" && SECRET.length < 32) throw new Error("JWT_SECRET must be at least 32 characters in production.");
 const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, "..", "frontend");
 const DATA = path.resolve(process.env.MYCLASSROOM_DATA_DIR || path.join(ROOT, "data"));
 const UPLOADS = path.resolve(process.env.MYCLASSROOM_UPLOADS_DIR || path.join(ROOT, "uploads"));
 
 
-const allowedOrigins = (process.env.CORS_ORIGINS || "").split(",").map(x => x.trim()).filter(Boolean);
+const appOrigin = String(process.env.APP_ORIGIN || "").trim();
+const allowedOrigins = [...new Set([...(process.env.CORS_ORIGINS || "").split(",").map(x => x.trim()).filter(Boolean), ...(appOrigin ? [appOrigin] : [])])];
 const corsOptions = { origin(origin, callback) {
   if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
   if (process.env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
@@ -42,11 +40,51 @@ app.disable("x-powered-by");
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors(corsOptions));
 app.use(express.json({limit:"2mb"}));
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: process.env.NODE_ENV === "test" ? 100 : 10, standardHeaders: true, legacyHeaders: false, message: { error: "Too many authentication attempts. Please try again later." } });
+app.use((req,res,next)=>{
+  if (["GET","HEAD","OPTIONS"].includes(req.method)) return next();
+  const origin=req.get("origin");
+  if (!origin) return process.env.NODE_ENV === "production"
+    ? res.status(403).json({error:"A valid request origin is required."}) : next();
+  const localOrigin=process.env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+  if (!allowedOrigins.includes(origin) && !localOrigin) return res.status(403).json({error:"Request origin is not allowed."});
+  next();
+});
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: process.env.NODE_ENV === "test" ? 100 : 10, standardHeaders: true, legacyHeaders: false, skip: req => req.path === "/csrf", message: { error: "Too many authentication attempts. Please try again later." } });
 app.use("/api/auth", authLimiter);
 // Uploaded learning files are served only through authenticated, institution-scoped routes.
 
 const db = createDatabase(path.join(DATA, "myclassroom.db"));
+const sessionStore = createSessionStore(db);
+const SESSION_COOKIE = process.env.NODE_ENV === "production" ? "__Host-mc_session" : "mc_session";
+const SESSION_COOKIE_SECURE = process.env.NODE_ENV === "production";
+function readCookie(req,name) {
+  const header=String(req.headers.cookie||"");
+  for (const part of header.split(";")) {
+    const index=part.indexOf("=");
+    if(index<0) continue;
+    if(part.slice(0,index).trim()===name) {
+      try { return decodeURIComponent(part.slice(index+1).trim()); } catch { return null; }
+    }
+  }
+  return null;
+}
+function setSessionCookie(res,sessionId) {
+  const secure=SESSION_COOKIE_SECURE?"; Secure":"";
+  res.setHeader("Set-Cookie",SESSION_COOKIE+"="+encodeURIComponent(sessionId)+"; Path=/; HttpOnly; SameSite=Lax; Max-Age=28800"+secure);
+}
+function clearSessionCookie(res) {
+  const secure=SESSION_COOKIE_SECURE?"; Secure":"";
+  res.setHeader("Set-Cookie",SESSION_COOKIE+"=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"+secure);
+}
+function issueSession(user,institutionId,res) {
+  res.setHeader("Cache-Control","no-store");
+  const membership=activeMembership(user.id,institutionId);
+  if(!membership) throw new Error("User has no active institution membership");
+  const session=sessionStore.create({userId:user.id,institutionId:membership.institution_id});
+  setSessionCookie(res,session.sessionId);
+  const safeUser={id:user.id,name:user.name,email:user.email,role:membership.role==="school_admin"?"admin":membership.role,phone:user.phone||"",bio:user.bio||"",institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role};
+  return {user:safeUser,csrfToken:session.csrfToken,...(process.env.NODE_ENV==="test"?{token:session.sessionId}:{})};
+}
 const asyncDb = openAsyncSqliteDatabase(db);
 const settingsRepository = createSettingsRepository(asyncDb);
 const notificationsRepository = createNotificationsRepository(asyncDb);
@@ -279,34 +317,36 @@ function activeMembership(userId, institutionId) {
     : db.prepare(sql + " ORDER BY m.created_at LIMIT 1").get(userId);
 }
 function auth(req,res,next){
-  const h=req.headers.authorization||"";
-  const token=h.startsWith("Bearer ")?h.slice(7):null;
-  if(!token) return res.status(401).json({error:"Authentication required"});
-  try {
-    req.user=jwt.verify(token,SECRET);
-    const membership=activeMembership(req.user.id,req.user.institution_id);
-    if(!membership) return res.status(403).json({error:"No active institution membership. Contact your school administrator."});
-    req.user.institution_id=membership.institution_id;
-    req.user.institution_role=membership.role;
-    req.user.institution_name=membership.institution_name;
-    const mustChangePassword=!!db.prepare("SELECT 1 FROM password_change_required WHERE user_id=?").get(req.user.id);
-    if(mustChangePassword && !(req.method==="POST" && req.path==="/api/auth/change-password")) return res.status(403).json({error:"You must change your temporary password before accessing your portal.",mustChangePassword:true});
-    if(membership.role==="parent" && !/^\/api\/guardian\/(children(?:\/\d+\/performance)?)?$/.test(req.path)) {
-      return res.status(403).json({error:"Parent accounts can only access their verified children's information."});
-    }
-    next();
-  } catch(e){ return res.status(401).json({error:"Invalid or expired token"}); }
+  const cookieSessionId=readCookie(req,SESSION_COOKIE);
+  let rawSessionId=cookieSessionId;
+  let session=rawSessionId?sessionStore.get(rawSessionId):null;
+  if(!session && process.env.NODE_ENV==="test") {
+    const h=req.headers.authorization||"";
+    const testToken=h.startsWith("Bearer ")?h.slice(7):null;
+    if(testToken){rawSessionId=testToken;session=sessionStore.get(testToken);}
+  }
+  if(!session) return res.status(401).json({error:"Authentication required or session expired"});
+  if(!["GET","HEAD","OPTIONS"].includes(req.method)) {
+    if(!sessionStore.verifyCsrf(session,req.get("x-csrf-token"))) return res.status(403).json({error:"Your security token is missing or expired. Refresh the page and try again."});
+  }
+  const membership=activeMembership(session.user_id,session.institution_id);
+  if(!membership) return res.status(403).json({error:"No active institution membership. Contact your school administrator."});
+  const account=db.prepare("SELECT id,name,email,role,phone,bio FROM users WHERE id=?").get(session.user_id);
+  if(!account) return res.status(401).json({error:"Account no longer exists"});
+  req.sessionId=rawSessionId;
+  req.session=session;
+  req.user={...account,institution_id:membership.institution_id,institution_role:membership.role,institution_name:membership.institution_name,role:membership.role==="school_admin"?"admin":membership.role};
+  const mustChangePassword=!!db.prepare("SELECT 1 FROM password_change_required WHERE user_id=?").get(req.user.id);
+  if(mustChangePassword && !(req.method==="POST" && req.path==="/api/auth/change-password")) return res.status(403).json({error:"You must change your temporary password before accessing your portal.",mustChangePassword:true});
+  if(membership.role==="parent" && !/^\/api\/guardian\/(children(?:\/\d+\/performance)?)?$/.test(req.path)) {
+    return res.status(403).json({error:"Parent accounts can only access their verified children's information."});
+  }
+  next();
 }
 function roles(...allowed){ return (req,res,next)=>{
   const role=req.user.institution_role==="school_admin"?"admin":req.user.institution_role;
   return allowed.includes(role)?next():res.status(403).json({error:"Not allowed"});
 }; }
-function sign(user,institutionId){
-  const membership=activeMembership(user.id,institutionId);
-  if(!membership) throw new Error("User has no active institution membership");
-  const effectiveRole=membership.role==="school_admin"?"admin":membership.role;
-  return jwt.sign({id:user.id,name:user.name,email:user.email,role:effectiveRole,institution_id:membership.institution_id,institution_role:membership.role},SECRET,{expiresIn:"8h"});
-}
 function log(actor,action,details="",institutionId=null){ const id=institutionId||activeMembership(actor)?.institution_id||null; db.prepare("INSERT INTO audit_log(actor_id,action,details,institution_id) VALUES(?,?,?,?)").run(actor,action,details,id); }
 function notify(userId,title,body,institutionId){ if(userId && institutionId) db.prepare("INSERT INTO notifications(user_id,title,body,institution_id) VALUES(?,?,?,?)").run(userId,title,body,institutionId); }
 function classForUser(user, classId){
@@ -409,6 +449,15 @@ app.patch("/api/platform/institutions/:id/status",platformOwner,(req,res)=>{
  res.json({ok:true,id:req.params.id,status});
 });
 
+app.post("/api/auth/csrf",(req,res)=>{
+  res.setHeader("Cache-Control","no-store");
+  const rawSessionId=readCookie(req,SESSION_COOKIE);
+  const session=rawSessionId?sessionStore.get(rawSessionId):null;
+  if(!session) return res.status(401).json({error:"Session expired. Please sign in again."});
+  const csrfToken=sessionStore.refreshCsrf(rawSessionId);
+  if(!csrfToken) return res.status(401).json({error:"Session expired. Please sign in again."});
+  res.json({csrfToken});
+});
 app.post("/api/auth/register",(req,res)=>{
   const {name,email,password,role="student"}=req.body;
   if(!name||!email||!password) return res.status(400).json({error:"Name, email and password are required"});
@@ -423,7 +472,7 @@ app.post("/api/auth/register",(req,res)=>{
     if(!institution) throw new Error("No institution is configured for self-registration");
     db.prepare("INSERT INTO institution_memberships(institution_id,user_id,role) VALUES(?,?,?)")
       .run(institution.id,u.id,safeRole);
-    res.json({user:u,token:sign(u)});
+    res.status(201).json(issueSession(u,institution.id,res));
   }catch(e){res.status(400).json({error:"Email already exists"});}
 });
 app.post("/api/auth/guardian/redeem",(req,res)=>{
@@ -455,7 +504,9 @@ app.post("/api/auth/guardian/redeem",(req,res)=>{
       return user;
     });
     const user=redeem();
-    res.status(201).json({user:{id:user.id,name:user.name,email:user.email,role:"parent",institution_id:invitation.institution_id},token:sign(user,invitation.institution_id)});
+    const issued=issueSession(user,invitation.institution_id,res);
+    issued.user.role="parent";
+    res.status(201).json(issued);
   } catch(e) {
     res.status(400).json({error:e.message||"Could not redeem invitation"});
   }
@@ -485,13 +536,14 @@ app.post("/api/auth/login",(req,res)=>{
     : memberships[0];
   if(!membership) return res.status(403).json({error:"This account has no active membership in the selected school."});
   const mustChangePassword=!!db.prepare("SELECT 1 FROM password_change_required WHERE user_id=?").get(u.id);
-  res.json({user:{id:u.id,name:u.name,email:u.email,role:membership.role==="school_admin"?"admin":membership.role,phone:u.phone,bio:u.bio,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(u,membership.institution_id),must_change_password:mustChangePassword});
+  res.json({...issueSession(u,membership.institution_id,res),must_change_password:mustChangePassword});
 });
 app.post("/api/auth/switch-institution",auth,(req,res)=>{
   const membership=activeMembership(req.user.id,String(req.body.institution_id||""));
   if(!membership) return res.status(403).json({error:"No active membership in that institution."});
   const user=db.prepare("SELECT id,name,email,role,phone,bio FROM users WHERE id=?").get(req.user.id);
-  res.json({user:{...user,role:membership.role==="school_admin"?"admin":membership.role,institution_id:membership.institution_id,institution_name:membership.institution_name,institution_role:membership.role},token:sign(user,membership.institution_id)});
+  sessionStore.revoke(req.sessionId);
+  res.json(issueSession(user,membership.institution_id,res));
 });
 app.post("/api/auth/change-password",auth,(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE id=?").get(req.user.id);
@@ -505,7 +557,13 @@ app.post("/api/auth/change-password",auth,(req,res)=>{
   if(mustChange) db.prepare("DELETE FROM password_change_required WHERE user_id=?").run(u.id);
   log(u.id,mustChange?"Completed temporary password change":"Changed password","",req.user.institution_id);
   const updated=db.prepare("SELECT * FROM users WHERE id=?").get(u.id);
-  res.json({ok:true,token:sign(updated,req.user.institution_id)});
+  sessionStore.revokeAllForUser(u.id);
+  res.json({ok:true,...issueSession(updated,req.user.institution_id,res)});
+});
+app.post("/api/auth/logout",auth,(req,res)=>{
+  sessionStore.revoke(req.sessionId);
+  clearSessionCookie(res);
+  res.json({ok:true});
 });
 app.post("/api/auth/request-reset",(req,res)=>{
   const u=db.prepare("SELECT * FROM users WHERE email=?").get(String(req.body.email||"").toLowerCase());
@@ -525,7 +583,9 @@ app.post("/api/auth/reset",(req,res)=>{
   const nextPassword=String(req.body.newPassword||"");
   if(nextPassword.length < 10 || nextPassword.length > 128) return res.status(400).json({error:"New password must be between 10 and 128 characters"});
   db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(bcrypt.hashSync(nextPassword,10),row.user_id);
-  db.prepare("UPDATE reset_tokens SET used=1 WHERE id=?").run(row.id); res.json({ok:true});
+  db.prepare("UPDATE reset_tokens SET used=1 WHERE id=?").run(row.id);
+  sessionStore.revokeAllForUser(row.user_id);
+  res.json({ok:true});
 });
 app.get("/api/me",auth,(req,res)=>{const u=db.prepare("SELECT id,name,email,phone,bio,created_at FROM users WHERE id=?").get(req.user.id);res.json({...u,role:req.user.role,institution_id:req.user.institution_id,institution_name:req.user.institution_name,institution_role:req.user.institution_role});});
 app.patch("/api/me",auth,(req,res)=>{

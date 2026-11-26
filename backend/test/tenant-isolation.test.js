@@ -11,6 +11,8 @@ let server;
 let baseUrl;
 let dataDir;
 let uploadDir;
+const sessionCookies = new Map();
+const csrfTokens = new Map();
 
 async function unusedPort() {
   return new Promise((resolve, reject) => {
@@ -23,10 +25,13 @@ async function unusedPort() {
   });
 }
 
-async function request(route, { method = "GET", body, token, platform = false } = {}) {
+async function request(route, { method = "GET", body, token, platform = false, csrf = true } = {}) {
   const headers = {};
   if (body !== undefined) headers["content-type"] = "application/json";
-  if (token) headers.authorization = `Bearer ${token}`;
+  if (token && sessionCookies.has(token)) headers.cookie = sessionCookies.get(token);
+  if (csrf && token && csrfTokens.has(token) && !["GET","HEAD","OPTIONS"].includes(method.toUpperCase())) {
+    headers["x-csrf-token"] = csrfTokens.get(token);
+  }
   if (platform) headers["x-platform-owner-key"] = platformKey;
   const response = await fetch(`${baseUrl}${route}`, {
     method,
@@ -38,7 +43,12 @@ async function request(route, { method = "GET", body, token, platform = false } 
   if (text) {
     try { payload = JSON.parse(text); } catch { payload = text; }
   }
-  return { status: response.status, body: payload };
+  if (payload && payload.token && response.headers.get("set-cookie")) {
+    const cookie = response.headers.get("set-cookie").split(";")[0];
+    sessionCookies.set(payload.token, cookie);
+    csrfTokens.set(payload.token, payload.csrfToken);
+  }
+  return { status: response.status, body: payload, headers: response.headers };
 }
 
 async function createSchool({ name, slug, adminName, email }) {
@@ -68,8 +78,11 @@ async function login(email) {
   });
   assert.equal(result.status, 200, JSON.stringify(result.body));
   assert.equal(result.body.must_change_password, true, "new school administrators must change their initial password");
-  const claims = JSON.parse(Buffer.from(result.body.token.split(".")[1], "base64url").toString("utf8"));
-  assert.equal(claims.exp - claims.iat, 8 * 60 * 60, "access tokens expire after an eight-hour session");
+  assert.match(result.body.token, /^[a-f0-9]{64}$/, "test harness exposes only the opaque session identifier");
+  assert.match(result.body.csrfToken, /^[a-f0-9]{64}$/, "CSRF token is separate from the session identifier");
+  const cookie = result.headers.get("set-cookie") || "";
+  assert.match(cookie, /^mc_session=[a-f0-9]{64}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=28800$/);
+  assert.doesNotMatch(cookie, /Domain=/, "session cookie remains host-only");
   const blocked = await request("/api/dashboard", { token: result.body.token });
   assert.equal(blocked.status, 403, "temporary-password accounts cannot access protected APIs");
   assert.equal(blocked.body.mustChangePassword, true);
@@ -315,4 +328,16 @@ test("platform onboarding, login, tenant isolation and suspension are enforced",
 
   const stillActiveDashboard = await request("/api/dashboard", { token: adminB.token });
   assert.equal(stillActiveDashboard.status, 200, "suspending one school must not affect another school");
+
+  const missingCsrf = await request("/api/me", {
+    method: "PATCH", token: adminB.token, csrf: false,
+    body: { name: "Should Not Be Saved" }
+  });
+  assert.equal(missingCsrf.status, 403, "cookie-authenticated writes require a valid CSRF token");
+
+  const logout = await request("/api/auth/logout", { method: "POST", token: adminB.token });
+  assert.equal(logout.status, 200);
+  assert.match(logout.headers.get("set-cookie") || "", /Max-Age=0/, "logout clears the browser session cookie");
+  const afterLogout = await request("/api/dashboard", { token: adminB.token });
+  assert.equal(afterLogout.status, 401, "a logged-out server-side session cannot be reused");
 });
