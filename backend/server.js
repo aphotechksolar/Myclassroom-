@@ -14,6 +14,7 @@ const { createLearningContentRepository } = require("./repositories/learning-con
 const { createSubmissionRepository } = require("./repositories/submissions");
 const { createAssessmentsRepository } = require("./repositories/assessments");
 const { createTimetableRepository } = require("./repositories/timetable");
+const { createPeopleRepository } = require("./repositories/people");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const { validateMaterialUpload } = require("./uploads/validation");
@@ -95,6 +96,7 @@ const learningContentRepository = createLearningContentRepository(asyncDb);
 const submissionRepository = createSubmissionRepository(asyncDb);
 const assessmentsRepository = createAssessmentsRepository(asyncDb);
 const timetableRepository = createTimetableRepository(asyncDb);
+const peopleRepository = createPeopleRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -675,11 +677,18 @@ app.get("/api/classes/:id/students",auth,(req,res)=>{
     : db.prepare("SELECT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN enrollments e ON e.student_id=u.id JOIN institution_memberships m ON m.user_id=u.id AND m.institution_id=? AND m.status='active' AND m.role='student' WHERE e.class_id=? ORDER BY u.name").all(req.user.institution_id,req.params.id);
   res.json(rows);
 });
-app.get("/api/students",auth,roles("admin","teacher"),(req,res)=>{
-  const rows=req.user.institution_role==="school_admin"?db.prepare("SELECT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE m.institution_id=? AND m.role='student' AND m.status='active' ORDER BY u.name").all(req.user.institution_id):db.prepare("SELECT DISTINCT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN institution_memberships m ON m.user_id=u.id JOIN enrollments e ON e.student_id=u.id JOIN classes c ON c.id=e.class_id WHERE m.institution_id=? AND m.status='active' AND c.institution_id=? AND c.teacher_id=? ORDER BY u.name").all(req.user.institution_id,req.user.institution_id,req.user.id);
-  res.json(rows);
+app.get("/api/students",auth,roles("admin","teacher"),async(req,res,next)=>{
+  try {
+    const rows=await peopleRepository.listStudentsForUser(req.user.id,req.user.institution_id,req.user.institution_role);
+    res.json(rows);
+  } catch(error) { next(error); }
 });
-app.get("/api/teachers",auth,roles("admin"),(req,res)=>res.json(db.prepare("SELECT u.id,u.name,u.email,u.phone,u.bio FROM users u JOIN institution_memberships m ON m.user_id=u.id WHERE m.institution_id=? AND m.role='teacher' AND m.status='active' ORDER BY u.name").all(req.user.institution_id)));
+app.get("/api/teachers",auth,roles("admin"),async(req,res,next)=>{
+  try {
+    const rows=await peopleRepository.listTeachersForInstitution(req.user.institution_id,req.user.institution_role);
+    res.json(rows);
+  } catch(error) { next(error); }
+});
 
 app.post("/api/subjects",auth,roles("admin","teacher"),(req,res)=>{const c=classForUser(req.user,req.body.class_id); if(!c)return res.status(403).json({error:"Not allowed"}); const r=db.prepare("INSERT INTO subjects(name,class_id,teacher_id) VALUES(?,?,?)").run(req.body.name,c.id,req.user.id); res.json(db.prepare("SELECT * FROM subjects WHERE id=?").get(r.lastInsertRowid));});
 app.get("/api/subjects",auth,async(req,res,next)=>{
