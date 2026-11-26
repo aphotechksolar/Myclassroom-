@@ -2,7 +2,6 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
 const { createDatabase } = require("./db");
 const { createSessionStore } = require("./auth/sessions");
 const { openAsyncSqliteDatabase } = require("./db/sqlite-async");
@@ -24,9 +23,6 @@ require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === "production" ? "" : "myclassroom-local-development-only");
-if (!SECRET) throw new Error("JWT_SECRET must be set to a strong random value in production.");
-if (process.env.NODE_ENV === "production" && SECRET.length < 32) throw new Error("JWT_SECRET must be at least 32 characters in production.");
 const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, "..", "frontend");
 const DATA = path.resolve(process.env.MYCLASSROOM_DATA_DIR || path.join(ROOT, "data"));
@@ -49,7 +45,7 @@ app.use((req,res,next)=>{
   const origin=req.get("origin");
   if (!origin) return process.env.NODE_ENV === "production"
     ? res.status(403).json({error:"A valid request origin is required."}) : next();
-  const localOrigin=process.env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\\d+)?$/.test(origin);
+  const localOrigin=process.env.NODE_ENV !== "production" && /^https?:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(origin);
   if (!allowedOrigins.includes(origin) && !localOrigin) return res.status(403).json({error:"Request origin is not allowed."});
   next();
 });
