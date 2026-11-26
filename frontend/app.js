@@ -1,12 +1,32 @@
 async function openMaterialFile(id){try{const r=await fetch("/api/materials/"+encodeURIComponent(id)+"/file",{headers:{Authorization:"Bearer "+token()}});if(!r.ok){let d={};try{d=await r.json()}catch{}throw new Error(d.error||"Unable to open file")}const blob=await r.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="learning-material-"+id;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000)}catch(e){toast(e.message)}}
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const token=()=>localStorage.getItem("mc_token");
-async function api(url,opts={}){opts.headers=opts.headers||{};if(token())opts.headers.Authorization="Bearer "+token();if(!(opts.body instanceof FormData))opts.headers["Content-Type"]="application/json";const r=await fetch("/api"+url,opts);let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.error||"Request failed");return d}
+async function api(url,opts={}){opts.headers=opts.headers||{};if(token())opts.headers.Authorization="Bearer "+token();if(!(opts.body instanceof FormData))opts.headers["Content-Type"]="application/json";const r=await fetch("/api"+url,opts);let d={};try{d=await r.json()}catch{}if(!r.ok){const error=new Error(d.error||"Request failed");error.status=r.status;error.data=d;throw error}return d}
 function toast(t){const x=document.createElement("div");x.className="toast";x.textContent=t;document.body.appendChild(x);setTimeout(()=>x.remove(),2600)}
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
 function logout(){localStorage.clear();location.href="/login.html"}
 async function initAuth(){
- if($("#login"))$("#login").onsubmit=async e=>{e.preventDefault();try{const d=await api("/auth/login",{method:"POST",body:JSON.stringify({email:$("#email").value,password:$("#password").value})});localStorage.mc_token=d.token;localStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html"}catch(err){$("#msg").innerHTML=`<p class="error">${esc(err.message)}</p>`}};
+ if($("#login"))$("#login").onsubmit=async e=>{
+  e.preventDefault();
+  const email=$("#email").value,password=$("#password").value;
+  const finish=async institutionId=>{
+   const payload={email,password};
+   if(institutionId)payload.institution_id=institutionId;
+   const d=await api("/auth/login",{method:"POST",body:JSON.stringify(payload)});
+   localStorage.mc_token=d.token;localStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html";
+  };
+  try{await finish("")}
+  catch(err){
+   if(err.data?.requiresInstitutionSelection && Array.isArray(err.data.institutions)){
+    $("#msg").innerHTML=`<section class="card"><p>We found more than one school linked to this account. Choose where you want to sign in.</p><form id="chooseSchool"><label for="institutionChoice">School</label><select id="institutionChoice" required>${err.data.institutions.map(i=>`<option value="${esc(i.institution_id)}">${esc(i.name)} · ${esc(i.role.replace("_"," "))}</option>`).join("")}</select><button class="btn" type="submit">Continue to school</button></form><p id="loginError" class="error" role="alert"></p></section>`;
+    $("#chooseSchool").onsubmit=async event=>{
+     event.preventDefault();
+     try{await finish($("#institutionChoice").value)}
+     catch(choiceError){$("#loginError").textContent=choiceError.message}
+    };
+   }else $("#msg").innerHTML=`<p class="error">${esc(err.message)}</p>`;
+  }
+ };
  if($("#register"))$("#register").onsubmit=async e=>{e.preventDefault();try{const d=await api("/auth/register",{method:"POST",body:JSON.stringify({name:$("#name").value,email:$("#email").value,password:$("#password").value,role:$("#role").value})});localStorage.mc_token=d.token;localStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html"}catch(err){$("#msg").innerHTML=`<p class="error">${esc(err.message)}</p>`}};
  if($("#guardianRedeem"))$("#guardianRedeem").onsubmit=async e=>{e.preventDefault();const form=Object.fromEntries(new FormData(e.currentTarget));try{const d=await api("/auth/guardian/redeem",{method:"POST",body:JSON.stringify(form)});localStorage.mc_token=d.token;localStorage.mc_user=JSON.stringify(d.user);location.href="/dashboard.html"}catch(err){$("#msg").innerHTML=`<p class="error">${esc(err.message)}</p>`}};
 }
