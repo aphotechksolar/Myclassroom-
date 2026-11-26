@@ -40,6 +40,20 @@ test("retrieves only an active, unexpired session and records activity", () => {
   db.close();
 });
 
+test("refreshes the CSRF token only for an active session", () => {
+  const { db, store, advance } = fixture();
+  const created = store.create({ userId: 14, institutionId: "school-refresh" });
+  const refreshed = store.refreshCsrf(created.sessionId);
+  assert.match(refreshed, /^[a-f0-9]{64}$/);
+  assert.notEqual(refreshed, created.csrfToken);
+  const session = store.get(created.sessionId);
+  assert.equal(store.verifyCsrf(session, created.csrfToken), false);
+  assert.equal(store.verifyCsrf(session, refreshed), true);
+  advance(DEFAULT_TTL_MS);
+  assert.equal(store.refreshCsrf(created.sessionId), null);
+  db.close();
+});
+
 test("validates the per-session CSRF token and rejects wrong or malformed values", () => {
   const { db, store } = fixture();
   const created = store.create({ userId: 4, institutionId: "school-c" });
