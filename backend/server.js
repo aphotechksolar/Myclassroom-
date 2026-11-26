@@ -16,6 +16,7 @@ const { createAssessmentsRepository } = require("./repositories/assessments");
 const { createTimetableRepository } = require("./repositories/timetable");
 const { createStorage } = require("./storage");
 const multer = require("multer");
+const { validateMaterialUpload } = require("./uploads/validation");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 require("dotenv").config();
@@ -631,7 +632,7 @@ app.post("/api/timetable",auth,roles("admin","teacher"),async(req,res,next)=>{tr
 app.get("/api/timetable",auth,async(req,res,next)=>{try{const rows=await timetableRepository.listForUser(req.user.id,req.user.institution_id,req.user.institution_role);res.json(rows);}catch(error){next(error);}});
 
 const upload=multer({storage:storage.multerStorage(),limits:{fileSize:10*1024*1024}});
-app.post("/api/materials",auth,roles("admin","teacher"),upload.single("file"),async(req,res,next)=>{
+app.post("/api/materials",auth,roles("admin","teacher"),upload.single("file"),validateMaterialUpload,async(req,res,next)=>{
   try{
     const file=req.file?"/uploads/"+req.file.filename:"";
     const result=await learningContentRepository.createMaterial({
