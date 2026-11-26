@@ -77,3 +77,70 @@ test("assessment listing rejects invalid authenticated scope", async () => {
     await database.close();
   }
 });
+
+
+test("assessment creation validates questions and notifies only enrolled class members", async () => {
+  const { database, repository } = setup();
+  try {
+    const created = await repository.createForClass({
+      userId: 1, institutionId: "school-a", role: "teacher", classId: 10,
+      title: "New Biology Quiz", type: "quiz", durationMinutes: 25, passMark: 60,
+      questions: [
+        { question: "What is a cell?", options: ["Basic unit", "Organ"], answer: 0 },
+        { question: "Invalid question", options: ["Only one"], answer: 0 }
+      ]
+    });
+    assert.ok(created.id > 0);
+    assert.deepEqual(created.studentIds, [101]);
+    const row = await database.one("SELECT * FROM assessments WHERE id = $1", [created.id]);
+    assert.equal(row.title, "New Biology Quiz");
+    assert.equal(row.duration_minutes, 25);
+    assert.equal(row.pass_mark, 60);
+    assert.deepEqual(JSON.parse(row.questions_json), [
+      { question: "What is a cell?", options: ["Basic unit", "Organ"], answer: 0 }
+    ]);
+  } finally {
+    await database.close();
+  }
+});
+
+test("assessment creation allows school admins but restricts teachers to their own classes", async () => {
+  const { database, repository } = setup();
+  try {
+    const adminCreated = await repository.createForClass({
+      userId: 900, institutionId: "school-a", role: "school_admin", classId: 11,
+      title: "School Chemistry Exam",
+      questions: [{ question: "Q", options: ["A", "B"], answer: 1 }]
+    });
+    assert.ok(adminCreated.id > 0);
+    assert.deepEqual(adminCreated.studentIds, [102]);
+
+    await assert.rejects(repository.createForClass({
+      userId: 1, institutionId: "school-a", role: "teacher", classId: 11,
+      title: "Not my class", questions: [{ question: "Q", options: ["A", "B"], answer: 0 }]
+    }), error => error.status === 403);
+
+    await assert.rejects(repository.createForClass({
+      userId: 1, institutionId: "school-a", role: "teacher", classId: 12,
+      title: "Cross-school", questions: [{ question: "Q", options: ["A", "B"], answer: 0 }]
+    }), error => error.status === 403);
+  } finally {
+    await database.close();
+  }
+});
+
+test("assessment creation rejects invalid questions, class IDs and roles", async () => {
+  const { database, repository } = setup();
+  try {
+    const base = {
+      userId: 1, institutionId: "school-a", role: "teacher", classId: 10,
+      title: "Invalid assessment"
+    };
+    await assert.rejects(repository.createForClass({ ...base, questions: "not-an-array" }), /Questions must be an array/);
+    await assert.rejects(repository.createForClass({ ...base, questions: [{ question: "No options", options: [], answer: 0 }] }), /at least one valid question/);
+    await assert.rejects(repository.createForClass({ ...base, classId: 0, questions: [{ options: ["A", "B"], answer: 0 }] }), /valid class ID/);
+    await assert.rejects(repository.createForClass({ ...base, role: "student", questions: [{ options: ["A", "B"], answer: 0 }] }), /Only school admins and teachers/);
+  } finally {
+    await database.close();
+  }
+});
