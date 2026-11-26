@@ -49,6 +49,6 @@ npm install
 npm run migrate:all
 ```
 
-The migrations create institution and institution-membership tables, add institution references to existing class, announcement, audit and settings records, create institution-isolated settings storage, and assign the current single-school data to a `legacy-school` institution. Both migrations are idempotent and record their versions in `schema_migrations`. The server also ensures the required schema exists at startup for existing installations.
+The ordered migrations create institution and institution-membership tables, add institution references to existing class, announcement, audit and settings records, create institution-isolated settings storage, and scope notifications and messages to an institution. Existing single-school communication records are assigned to `legacy-school`. Migrations are idempotent and record their versions in `schema_migrations`. The server also ensures the required schema exists at startup for existing installations.
 
 **This is an early tenant-scoping implementation, not production certification.** Do not onboard a second school or expose real school data until the API changes, role flows, deployment, and cross-institution isolation tests have been independently tested and reviewed. Back up the SQLite database before running migrations on any database containing data. Existing local demo data is assigned to `legacy-school`.
