@@ -141,7 +141,7 @@ test("assessment creation rejects invalid questions, class IDs and roles", async
       userId: 1, institutionId: "school-a", role: "teacher", classId: 10,
       title: "Invalid assessment"
     };
-    await assert.rejects(repository.createForClass({ ...base, questions: "not-an-array" }), /Questions must be an array/);
+    await assert.rejects(repository.createForClass({ ...base, questions: "not-an-array" }), /between 1 and 100 questions/);
     await assert.rejects(repository.createForClass({ ...base, questions: [{ question: "No options", options: [], answer: 0 }] }), /between 2 and 10 options/);
     await assert.rejects(repository.createForClass({ ...base, classId: 0, questions: [{ options: ["A", "B"], answer: 0 }] }), /valid class ID/);
     await assert.rejects(repository.createForClass({ ...base, role: "student", questions: [{ options: ["A", "B"], answer: 0 }] }), /Only school admins and teachers/);
