@@ -72,6 +72,18 @@ function createSessionStore(db, options = {}) {
     return { ...row, last_seen_at: currentTime, sessionHash };
   }
 
+  function refreshCsrf(rawSessionId) {
+    if (typeof rawSessionId !== "string" || !/^[a-f0-9]{64}$/i.test(rawSessionId)) return null;
+    const sessionHash = digest(rawSessionId);
+    const currentTime = new Date(now()).toISOString();
+    const active = find.get(sessionHash, currentTime);
+    if (!active) return null;
+    const csrfToken = randomBytes(32).toString("hex");
+    const updated = db.prepare("UPDATE auth_sessions SET csrf_hash=? WHERE session_hash=? AND revoked_at IS NULL AND expires_at>?")
+      .run(digest(csrfToken), sessionHash, currentTime);
+    return updated.changes === 1 ? csrfToken : null;
+  }
+
   function verifyCsrf(session, suppliedToken) {
     if (!session || typeof suppliedToken !== "string" || !/^[a-f0-9]{64}$/i.test(suppliedToken)) return false;
     const row = db.prepare("SELECT csrf_hash FROM auth_sessions WHERE session_hash=? AND revoked_at IS NULL AND expires_at>?")
@@ -95,7 +107,7 @@ function createSessionStore(db, options = {}) {
       .run(new Date(now()).toISOString()).changes;
   }
 
-  return Object.freeze({ create, get, verifyCsrf, revoke, revokeAllForUser, pruneExpired });
+  return Object.freeze({ create, get, refreshCsrf, verifyCsrf, revoke, revokeAllForUser, pruneExpired });
 }
 
 module.exports = { createSessionStore, DEFAULT_TTL_MS };
