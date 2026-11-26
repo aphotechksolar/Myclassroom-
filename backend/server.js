@@ -45,7 +45,7 @@ app.use((req,res,next)=>{
   const origin=req.get("origin");
   if (!origin) return process.env.NODE_ENV === "production"
     ? res.status(403).json({error:"A valid request origin is required."}) : next();
-  const localOrigin=process.env.NODE_ENV !== "production" && /^https?:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(origin);
+  const localOrigin=process.env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
   if (!allowedOrigins.includes(origin) && !localOrigin) return res.status(403).json({error:"Request origin is not allowed."});
   next();
 });
