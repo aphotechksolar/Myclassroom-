@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 const { createDatabase } = require("./db");
 const { openAsyncSqliteDatabase } = require("./db/sqlite-async");
 const { createSettingsRepository } = require("./repositories/settings");
+const { createNotificationsRepository } = require("./repositories/notifications");
 const { createStorage } = require("./storage");
 const multer = require("multer");
 const helmet = require("helmet");
@@ -40,6 +41,7 @@ app.use("/api/auth", authLimiter);
 const db = createDatabase(path.join(DATA, "myclassroom.db"));
 const asyncDb = openAsyncSqliteDatabase(db);
 const settingsRepository = createSettingsRepository(asyncDb);
+const notificationsRepository = createNotificationsRepository(asyncDb);
 const storage = createStorage({ root: UPLOADS });
 
 db.exec(`
@@ -579,7 +581,12 @@ app.get("/api/attendance-summary/:classId",auth,(req,res)=>{if(!classForUser(req
 
 app.post("/api/announcements",auth,roles("admin","teacher"),(req,res)=>{const c=req.body.class_id?classForUser(req.user,req.body.class_id):null;if(req.body.class_id&&!c)return res.status(403).json({error:"Not allowed"});const r=db.prepare("INSERT INTO announcements(title,body,class_id,author_id,institution_id) VALUES(?,?,?,?,?)").run(req.body.title,req.body.body,req.body.class_id||null,req.user.id,req.user.institution_id);const targets=req.body.class_id?db.prepare("SELECT e.student_id FROM enrollments e JOIN classes c ON c.id=e.class_id WHERE e.class_id=? AND c.institution_id=?").all(req.body.class_id,req.user.institution_id).map(x=>x.student_id):db.prepare("SELECT m.user_id id FROM institution_memberships m WHERE m.institution_id=? AND m.role='student' AND m.status='active'").all(req.user.institution_id).map(x=>x.id);targets.forEach(id=>notify(id,req.body.title,req.body.body,req.user.institution_id));res.json({id:r.lastInsertRowid});});
 app.get("/api/announcements",auth,(req,res)=>{const rows=req.user.institution_role==="student"?db.prepare(`SELECT a.*,c.name class_name,u.name author_name FROM announcements a LEFT JOIN classes c ON c.id=a.class_id LEFT JOIN users u ON u.id=a.author_id LEFT JOIN enrollments e ON e.class_id=a.class_id WHERE a.institution_id=? AND (a.class_id IS NULL OR e.student_id=?) ORDER BY a.id DESC`).all(req.user.institution_id,req.user.id):db.prepare(`SELECT a.*,c.name class_name,u.name author_name FROM announcements a LEFT JOIN classes c ON c.id=a.class_id LEFT JOIN users u ON u.id=a.author_id WHERE a.institution_id=? ORDER BY a.id DESC`).all(req.user.institution_id);res.json(rows);});
-app.get("/api/notifications",auth,(req,res)=>res.json(db.prepare("SELECT * FROM notifications WHERE user_id=? AND institution_id=? ORDER BY id DESC LIMIT 100").all(req.user.id,req.user.institution_id)));
+app.get("/api/notifications",auth,async(req,res,next)=>{
+  try {
+    const rows = await notificationsRepository.listForUser(req.user.id, req.user.institution_id);
+    res.json(rows);
+  } catch (error) { next(error); }
+});
 app.patch("/api/notifications/:id/read",auth,(req,res)=>{db.prepare("UPDATE notifications SET read_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND institution_id=?").run(req.params.id,req.user.id,req.user.institution_id);res.json({ok:true});});
 
 app.get("/api/messages",auth,(req,res)=>res.json(db.prepare(`SELECT m.*,s.name sender_name,r.name receiver_name FROM messages m JOIN users s ON s.id=m.sender_id JOIN users r ON r.id=m.receiver_id JOIN institution_memberships sm ON sm.user_id=m.sender_id AND sm.institution_id=? AND sm.status='active' JOIN institution_memberships rm ON rm.user_id=m.receiver_id AND rm.institution_id=? AND rm.status='active' WHERE m.institution_id=? AND (m.sender_id=? OR m.receiver_id=?) ORDER BY m.id DESC`).all(req.user.institution_id,req.user.institution_id,req.user.institution_id,req.user.id,req.user.id)));
