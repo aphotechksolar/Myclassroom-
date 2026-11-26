@@ -54,7 +54,7 @@ test("students can view only their own report card",async()=>{
 test("teachers can view only students in classes they teach",async()=>{
  const {database,repository}=setup();try{
   assert.equal((await repository.getForUser(1,"school-a","teacher",101,"School A")).student.id,101);
-  await assert.rejects(repository.getForUser(2,"school-a","teacher",101,"School A"),error=>error.status===403);
+  await assert.rejects(repository.getForUser(2,"school-a","teacher",102,"School A"),error=>error.status===403);
  }finally{await database.close();}
 });
 test("report cards deny cross-school, inactive, parent and invalid requests",async()=>{
