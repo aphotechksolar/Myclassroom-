@@ -15,7 +15,7 @@ async function boot(){
  if(!token())return location.href="/login.html";
  state.user=JSON.parse(localStorage.mc_user||"{}");
  $("#app").innerHTML=`<div class="shell"><aside class="side" id="sidebar"><a class="brand" href="#">MyClassroom</a><div class="small" style="color:#aeb9ca">${esc(state.user.role.toUpperCase())} PORTAL</div><div class="nav">
- ${["overview","profile","people","classes","materials","assignments","assessments","attendance","timetable","performance","messages","notifications","reports","admin"].filter(p=>state.user.role==="admin"||p!=="admin").map(p=>`<button data-page="${p}">${icons[p]||"•"} ${title(p)}</button>`).join("")}
+ ${(state.user.role==="parent"?["overview"]:["overview","profile","people","classes","materials","assignments","assessments","attendance","timetable","performance","messages","notifications","reports","admin"].filter(p=>state.user.role==="admin"||p!=="admin")).map(p=>`<button data-page="${p}">${icons[p]||"•"} ${title(p)}</button>`).join("")}
  <button onclick="logout()">↪ Log out</button></div></aside><main class="main"><div class="bar"><div class="bar-heading"><button class="menu-toggle" id="menuToggle" aria-label="Toggle navigation" aria-expanded="false">☰</button><div><h1 id="title">Overview</h1><span class="muted" id="subtitle"></span></div></div><div class="userbox">${esc(state.user.name)} · ${esc(state.user.email)}</div></div><div id="view"></div></main></div><div id="modal" class="modal"></div>`;
  $(".nav button[data-page]").forEach(b=>b.onclick=()=>{show(b.dataset.page);$("#sidebar").classList.remove("side-open");$("#menuToggle").setAttribute("aria-expanded","false")});
  $("#menuToggle").onclick=()=>{const open=$("#sidebar").classList.toggle("side-open");$("#menuToggle").setAttribute("aria-expanded",String(open))};
@@ -26,11 +26,45 @@ function title(x){return x[0].toUpperCase()+x.slice(1).replace("-", " ")}
 async function show(page){
  state.page=page;$$(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.page===page));$("#title").textContent=title(page);$("#subtitle").textContent="";
  try{
-  if(page==="overview")return state.user.role==="student"?studentOverview():overview(); if(page==="profile")return profile(); if(page==="people")return people(); if(page==="classes")return classes();
+  if(page==="overview")return state.user.role==="parent"?parentOverview():state.user.role==="student"?studentOverview():overview(); if(page==="profile")return profile(); if(page==="people")return people(); if(page==="classes")return classes();
   if(page==="materials")return materials(); if(page==="assignments")return assignments(); if(page==="assessments")return assessments(); if(page==="attendance")return attendance();
   if(page==="timetable")return timetable(); if(page==="performance")return performance(); if(page==="messages")return messages(); if(page==="notifications")return notifications();
   if(page==="reports")return reports(); if(page==="admin")return admin();
  }catch(e){$("#view").innerHTML=`<div class="card"><p class="error">${esc(e.message)}</p></div>`}
+}
+
+
+async function parentOverview(){
+ const children=await api("/guardian/children");
+ $("#subtitle").textContent="Your verified children's school progress";
+ if(!children.length){
+  $("#view").innerHTML='<section class="card"><h3>No linked children yet</h3><p class="muted">Ask your school administrator to verify your relationship and issue a guardian invitation.</p></section>';
+  return;
+ }
+ async function selectChild(id){
+  const report=await api("/guardian/children/"+encodeURIComponent(id)+"/performance");
+  const child=children.find(c=>String(c.id)===String(id));
+  $("#view").querySelectorAll("[data-child]").forEach(b=>b.classList.toggle("selected",String(b.dataset.child)===String(id)));
+  const results=report.results||[],attendance=report.attendance||[],assignments=report.assignments||[];
+  const average=results.length?(results.reduce((n,r)=>n+Number(r.percentage||0),0)/results.length).toFixed(1):"—";
+  const attendanceTotal=attendance.reduce((n,a)=>n+Number(a.count||0),0);
+  const present=attendance.filter(a=>String(a.status).toLowerCase()==="present").reduce((n,a)=>n+Number(a.count||0),0);
+  $("#childReport").innerHTML=`
+   <div class="grid parent-stats">
+    <div class="stat"><span>Assessments completed</span><strong>${results.length}</strong></div>
+    <div class="stat"><span>Assessment average</span><strong>${average}${average==="—"?"":"%"}</strong></div>
+    <div class="stat"><span>Attendance</span><strong>${attendanceTotal?Math.round(present/attendanceTotal*100)+"%":"—"}</strong></div>
+   </div>
+   <section class="card"><h3>Assessment results</h3>${results.length?results.map(r=>`<div class="parent-row"><div><b>${esc(r.title)}</b><span>${esc(r.type)} · ${esc(r.submitted_at||"")}</span></div><strong>${esc(r.percentage)}%</strong></div>`).join(""):'<p class="muted">No completed assessments yet.</p>'}</section>
+   <section class="card"><h3>Attendance summary</h3>${attendance.length?attendance.map(a=>`<div class="parent-row"><span>${esc(a.status)}</span><strong>${esc(a.count)} days</strong></div>`).join(""):'<p class="muted">No attendance records yet.</p>'}</section>
+   <section class="card"><h3>Assignments and feedback</h3>${assignments.length?assignments.map(a=>`<div class="parent-row"><div><b>${esc(a.title)}</b><span>Due ${esc(a.due_date||"Not set")} · ${a.score==null?"Not graded":esc(a.score)+" marks"}</span>${a.feedback?`<p>${esc(a.feedback)}</p>`:""}</div></div>`).join(""):'<p class="muted">No assignments found.</p>'}</section>`;
+ }
+ $("#view").innerHTML=`
+  <section class="student-welcome parent-welcome"><div><span class="pill">PARENT & GUARDIAN SPACE</span><h2>Welcome, ${esc(state.user.name.split(" ")[0])}.</h2><p>View progress for children verified by your school.</p></div><div class="student-welcome-icon" aria-hidden="true">♡</div></section>
+  <section class="card"><h3>Your linked children</h3><div class="parent-child-list">${children.map(c=>`<button class="parent-child" data-child="${esc(c.id)}"><b>${esc(c.name)}</b><span>${esc(c.class_names||"Class details unavailable")}</span></button>`).join("")}</div></section>
+  <div id="childReport" class="parent-report"></div>`;
+ $("#view").querySelectorAll("[data-child]").forEach(b=>b.onclick=()=>selectChild(b.dataset.child).catch(e=>{$("#childReport").innerHTML=`<div class="card"><p class="error">${esc(e.message)}</p></div>`}));
+ await selectChild(children[0].id);
 }
 
 async function studentOverview(){
