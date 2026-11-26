@@ -346,7 +346,18 @@ const platformLimiter=rateLimit({windowMs:15*60*1000,max:30,standardHeaders:true
 app.use("/api/platform",platformLimiter);
 app.get("/api/platform/institutions",platformOwner,(req,res)=>{
  const rows=db.prepare(`SELECT i.id,i.name,i.slug,i.institution_type,i.country_code,i.timezone,i.currency_code,i.status,i.created_at,
- (SELECT COUNT(*) FROM institution_memberships m WHERE m.institution_id=i.id AND m.status='active') active_members
+ (SELECT COUNT(*) FROM institution_memberships m WHERE m.institution_id=i.id AND m.status='active') active_members,
+ (SELECT COUNT(*) FROM institution_memberships m WHERE m.institution_id=i.id AND m.status='active' AND m.role='school_admin') admin_count,
+ (SELECT COUNT(*) FROM institution_memberships m WHERE m.institution_id=i.id AND m.status='active' AND m.role='teacher') teacher_count,
+ (SELECT COUNT(*) FROM institution_memberships m WHERE m.institution_id=i.id AND m.status='active' AND m.role='student') student_count,
+ (SELECT COUNT(*) FROM institution_memberships m JOIN password_change_required p ON p.user_id=m.user_id WHERE m.institution_id=i.id AND m.status='active' AND m.role='school_admin') pending_admin_password_changes,
+ (SELECT GROUP_CONCAT(u.name, ', ') FROM institution_memberships m JOIN users u ON u.id=m.user_id WHERE m.institution_id=i.id AND m.status='active' AND m.role='school_admin') admin_names,
+ (SELECT GROUP_CONCAT(u.email, ', ') FROM institution_memberships m JOIN users u ON u.id=m.user_id WHERE m.institution_id=i.id AND m.status='active' AND m.role='school_admin') admin_emails,
+ (SELECT MAX(activity_at) FROM (
+   SELECT created_at AS activity_at FROM audit_log WHERE institution_id=i.id
+   UNION ALL
+   SELECT created_at AS activity_at FROM platform_audit_log WHERE institution_id=i.id
+ )) last_activity_at
  FROM institutions i ORDER BY i.created_at DESC`).all();
  res.json(rows);
 });

@@ -180,6 +180,18 @@ test("platform onboarding, login, tenant isolation and suspension are enforced",
   });
   assert.equal(studentA.status, 201, JSON.stringify(studentA.body));
   assert.equal(studentA.body.institution_role, "student");
+  const platformDirectory = await request("/api/platform/institutions", { platform: true });
+  assert.equal(platformDirectory.status, 200);
+  const directoryA = platformDirectory.body.find(row => row.id === schoolA.institution.id);
+  assert.equal(directoryA.admin_count, 1);
+  assert.match(directoryA.admin_names, /Northfield Admin/);
+  assert.equal(directoryA.student_count, 1);
+  assert.equal(directoryA.teacher_count, 0);
+  assert.equal(directoryA.pending_admin_password_changes, 0, "admin password setup is complete after first login password change");
+  assert.ok(directoryA.last_activity_at, "school audit activity is visible to the platform owner");
+  const directoryB = platformDirectory.body.find(row => row.id === schoolB.institution.id);
+  assert.equal(directoryB.student_count, 0);
+  assert.equal(directoryB.admin_count, 1);
   const studentLogin = await request("/api/auth/login", {
     method: "POST",
     body: { email: "northfield.student@example.test", password: "StudentPassword!2026" }
